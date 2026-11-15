@@ -1,0 +1,38 @@
+{
+  "name": "dsh-agent-master",
+  "version": "0.1.0",
+  "description": "Master 对话指挥多子对话：共享黑板 + 约束台账 + 结构化交接契约 + 指挥台面板。",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./client/client.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "client",
+    "cordis.patch.yml",
+    "README.md",
+    "CHANGELOG.md"
+  ],
+  "license": "MIT",
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web"
+    }
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  },
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "multi-conversation",
+    "orchestration",
+    "blackboard"
+  ]
+}

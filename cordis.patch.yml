@@ -1,0 +1,11 @@
+# dsh-agent-master — 插入宿主侧 orchestrator（工具/台账/黑板）与客户端指挥台入口。
+- insert:
+    - id: agent-master
+      name: dsh-agent-master
+      config:
+        maxChildren: 4
+        maxParallelSearch: 4
+        boardMaxEntries: 256
+        digestBudgetBytes: 65536
+        maxReportBytes: 8192
+        defaultEnabled: false
