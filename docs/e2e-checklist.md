@@ -18,6 +18,15 @@
 - [ ] 右侧栏出现 **指挥台** 标签（空态文案：还没有下派任何子对话）
 - [ ] 让模型开一个子对话后，子对话里同样能看到 `master_report`（这条最容易失败：子 preset 可能不暴露本包工具）
 
+## 1.5 Master 会话（T9 新增，重启后先看这一节）
+
+- [ ] 左栏会话列表**顶部**出现标题为 `Master` 的会话（置顶生效；不要求它已打开）
+- [ ] 打开它：工具列表只有 5 个 master 工具 + `read`/`write`/`edit`/`ask_user_question`，**没有 pwsh / bash / 终端**
+- [ ] 问模型「你能执行终端命令吗」→ 应明确回答不能，而不是尝试调用不存在的工具
+- [ ] 再重启一次 DSH：仍是同一个 master 会话（不会每次启动都新建一条）
+- [ ] 让 master 带 `tools: ["read","write","pwsh"]` 调一次 `master_assign`：子对话里工具恰为这三个 + `master_report`/`master_board`
+- [ ] 若 host 不认 `tools.restrict`：master 工具仍正常，只是白名单不生效；宿主日志应有 `agent-master` 诊断而不是启动失败
+
 ## 2. 场景 A：深度调研（主场景）
 
 主对话里发：

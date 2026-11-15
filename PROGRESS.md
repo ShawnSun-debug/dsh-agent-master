@@ -7,8 +7,9 @@
 - 计划已批准并落盘：`.scratch/plan.md`（决策表、接口、验收、票与阻塞边）。
 - 模块契约：`.scratch/interfaces.md`（含 deck 契约 v1.1；v1.2 待 T5 落地：deck 事件改追加到 root 会话）。
 - DSH API 查实笔记：`.scratch/api-notes.md`（含行号证据，改代码前先看它，别猜 API）。
-- 测试：`npm test`（`scripts/test.mjs`；本机 `%TEMP%` 对沙箱进程不可写，脚本把 TEMP 指到 `.test-tmp`）。
-- 当前：**162 个测试全绿**；插件已装进 desktop profile。
+- 测试：`npm test`（`scripts/test.mjs`；本机 `%TEMP%` 对沙箱进程不可写，脚本把 TEMP 指到 `.test-tmp`；且 `node --test` 在 confined 模式下会因管道 spawn 报 EPERM，已改成逐文件 `node <file>`）。
+- 当前：**181 个测试全绿（14 个文件）**；插件已装进 desktop profile（link 指向本仓库，改代码即生效）。
+- 2026-11-16 新增 **T9：Master 会话**（自动创建 / 工作区置顶 / 标题 / 工具白名单）+ `master_assign.tools` 子对话白名单。宿主 API 已在 asar 源码核对：`ctx.agents.create({ sessionId, meta, setup })`、`agentCtx.tools.restrict({ allow })`、`ctx.workspaceRegistry.pinSession()`、`ctx.sessionTitle.rename()`。
 
 ## 修复记录：真宿主首次加载 failed（2026-11-16）
 
@@ -28,6 +29,7 @@
 | T3 | 交接契约渲染与校验 | `70d83d8` |
 | T4 | 五个模型工具 + 分角色提示词 | `b19057e` |
 | T5 | 宿主接线 + agentMaster 投影 + deck | `282b278` |
+| T9 | Master 会话（创建/置顶/标题/工具白名单）+ `master_assign.tools` | 待提交 |
 
 ## 3. 进行中
 
@@ -38,10 +40,10 @@
 
 ## 4. 下一步
 
-1. 收口 T5/T6/T7 → 全量 `npm test` → 提交。
-2. **重启 DSH**（会结束当前会话，必须由用户操作），然后按 `docs/e2e-checklist.md` 勾完三场景。
+1. 提交 T9 → 全量 `npm test` 全绿。
+2. **重启 DSH**（会结束当前会话，必须由用户操作），然后按 `docs/e2e-checklist.md` 勾完三场景 + 新增的 master 段。
 3. 三场景细节已在清单里：并行调研 / 并行改码 / 冷恢复接力。
-4. README/CHANGELOG 补完。
+4. 重启后重点确认：master 会话出现在左栏顶部、标题是 `Master`、工具列表里没有 pwsh/bash；`master_assign` 带 `tools` 的子对话工具被裁剪。
 
 ## 5. 雷区（踩过的）
 
@@ -51,3 +53,6 @@
 - **`ctx.subagents.startActivation` 的 `parent` 必须是活 Agent 实例**（`exec.agent`），冷恢复后缓存的旧 Agent 会被判 UNAUTHORIZED → 工具集按 agent 实例 WeakMap 缓存。
 - **PowerShell 单元素管道会退化成字符串**，`+= ` 变拼接 → 拼 PATH 之类必须 `@()` 强制数组。
 - 子代理**不得自行 commit**；提交由 lead 做，提交前必须 `npm test` 全绿。
+- **`tools.restrict()` 只能挂在 agent 作用域的 `agent.ctx` 上**：全局 ctx 调用直接抛错（dsh-tools `src/index.ts:162-165`，错误文案就是 "requires a scoped context"）。同一原因，`agent/created` 是 serial 事件，挂监听要赶在第一步之前。
+- **子对话必须预分配 `childId`**：`startActivation` 的 `agent/created` 早于它返回，不预分配就赶不上第一步的工具声明（manager 用 `spec.childId ?? randomUUID()`，见 `src/manager.ts:335`）。
+- **`node --test` 在本机沙箱下不可用**：它会为每个测试文件再 spawn 带管道 stdio 的子进程 → EPERM；`scripts/test.mjs` 已改成逐文件 `node <file>`（stdio: 'inherit' 允许）。

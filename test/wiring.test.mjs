@@ -9,7 +9,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { existsSync } from 'node:fs'
-import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, realpath, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -22,7 +22,16 @@ import { TOOL_NAMES } from '../lib/tools.js'
  * effect 的 execute 返回值可能是 disposer，也可能是 Promise<disposer>（投影注册就是后者）。
  */
 function fakeCtx(options = {}) {
-  const calls = { tools: [], sections: [], projections: [], effects: [], activations: [], disposals: [] }
+  const calls = {
+    tools: [],
+    sections: [],
+    projections: [],
+    effects: [],
+    activations: [],
+    disposals: [],
+    listeners: new Map(),
+    injects: [],
+  }
   const ctx = {
     effect(execute, label) {
       calls.effects.push(label)
@@ -64,6 +73,20 @@ function fakeCtx(options = {}) {
         calls.activations.push(spec)
         return { childId: 'child-' + calls.activations.length, name: spec.name ?? 'child' }
       },
+    },
+    on(event, listener) {
+      const list = calls.listeners.get(event) ?? []
+      list.push(listener)
+      calls.listeners.set(event, list)
+      return () => {
+        calls.listeners.set(event, (calls.listeners.get(event) ?? []).filter((item) => item !== listener))
+      }
+    },
+    emit(event, payload) {
+      for (const listener of calls.listeners.get(event) ?? []) listener(payload)
+    },
+    inject(names, callback) {
+      calls.injects.push({ names, callback })
     },
   }
   return { ctx, calls }
@@ -110,8 +133,8 @@ test('wiring：注册 5 个契约工具名，每个都包在 ctx.effect 里且�
   await apply(ctx, {})
 
   assert.deepEqual(calls.tools.map((definition) => definition.name), [...TOOL_NAMES])
-  // 5 工具 + 1 提示词 + 1 投影，全部经 effect 注册（卸载才能回卷）
-  assert.equal(calls.effects.length, 7)
+  // 5 工具 + 1 提示词 + 1 投影 + 1 按会话限制工具的监听，全部经 effect 注册（卸载才能回卷）
+  assert.equal(calls.effects.length, 8)
   for (const label of calls.effects) assert.match(label, /^agent-master: /)
   for (const toolName of TOOL_NAMES) {
     assert.ok(calls.effects.some((label) => label.includes(toolName)), '工具 ' + toolName + ' 的注册没有走 effect')
@@ -470,7 +493,9 @@ test('wiring：rootOf 抛错时 deck 降级追加到调用方会话，工具仍�
  */
 test('wiring：严格 ctx（访问未注入属性即抛）下 apply 仍能完成', async () => {
   const { ctx: inner, calls } = fakeCtx()
-  const ALLOWED = new Set(['effect', 'on', 'emit', 'get', 'logger', 'then', 'constructor', ...inject])
+  // inject 是 cordis Context 的方法（不是服务）：真宿主上可访问，这里一并放行。
+  // 访问「没注入的服务」仍然抛错，保护目的不变。
+  const ALLOWED = new Set(['effect', 'on', 'emit', 'get', 'logger', 'then', 'constructor', 'inject', ...inject])
   const strict = new Proxy(inner, {
     get(target, prop, receiver) {
       if (typeof prop === 'symbol') return Reflect.get(target, prop, receiver)
@@ -483,4 +508,99 @@ test('wiring：严格 ctx（访问未注入属性即抛）下 apply 仍能完成
   assert.equal(typeof dispose, 'function')
   assert.equal(calls.tools.length, TOOL_NAMES.length)
   dispose()
+})
+
+test('wiring：assign 带 tools 时预分配 childId，子对话 created 后白名单生效（含自动补）', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'agent-master-wiring-tools-'))
+  try {
+    const { ctx, calls } = fakeCtx()
+    await apply(ctx, { dataDir: dir })
+    const assign = findTool(calls, 'master_assign')
+    const root = makeAgent('root-1')
+    await assign.execute({ label: 'ticket-1', brief: { goal: '完成票 1' }, tools: ['read', 'pwsh'] }, { agent: root })
+
+    assert.equal(calls.activations.length, 1)
+    const childId = calls.activations[0].childId
+    assert.match(childId, /^session-[0-9a-f-]{36}$/, '子对话必须预先拿到 childId，agent/created 才认得出它')
+
+    const restricted = []
+    const child = {
+      id: childId,
+      session: { append() {} },
+      ctx: { tools: { restrict: (filter) => restricted.push(filter) } },
+    }
+    ctx.emit('agent/created', { agent: child, source: 'fresh' })
+
+    assert.equal(restricted.length, 1, '子对话 created 时应该被限制一次')
+    assert.deepEqual(restricted[0].allow, ['read', 'pwsh', 'master_report', 'master_board'])
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('wiring：未登记白名单的会话 created 时不被限制', async () => {
+  const { ctx } = fakeCtx()
+  await apply(ctx, { masterEnabled: false })
+  const restricted = []
+  const bystander = {
+    id: 'session-unrelated',
+    session: {},
+    ctx: { tools: { restrict: (filter) => restricted.push(filter) } },
+  }
+  ctx.emit('agent/created', { agent: bystander })
+  assert.equal(restricted.length, 0)
+})
+
+test('wiring：apply 登记 agents/workspaceRegistry 注入，引导出一个置顶的 master 会话', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'agent-master-wiring-boot-'))
+  try {
+    const { ctx, calls } = fakeCtx()
+    await apply(ctx, { dataDir: dir })
+    assert.equal(calls.injects.length, 1)
+    assert.deepEqual(calls.injects[0].names, ['agents', 'workspaceRegistry'])
+
+    const created = []
+    const pinned = []
+    const attached = []
+    const scoped = {
+      get(name) {
+        if (name === 'agents') {
+          return {
+            async create(options) {
+              created.push(options)
+              options.setup({ tools: { restrict() {} } })
+              return { agent: { session: { id: options.sessionId } } }
+            },
+          }
+        }
+        if (name === 'workspaceRegistry') {
+          return {
+            async create() {
+              return {
+                async attachSession(id) {
+                  attached.push(id)
+                },
+              }
+            },
+            async pinSession(id) {
+              pinned.push(id)
+            },
+          }
+        }
+        if (name === 'sessionTitle') return { rename() {} }
+        return undefined
+      },
+    }
+    calls.injects[0].callback(scoped)
+
+    for (let i = 0; i < 200 && created.length === 0; i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    }
+    assert.equal(created.length, 1, 'apply 应该引导创建 1 个 master 会话')
+    assert.equal(pinned.length, 1, 'master 会话应该被置顶')
+    assert.equal(attached[0], created[0].sessionId)
+    assert.deepEqual(created[0].meta.cwd, await realpath(process.cwd()))
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
 })

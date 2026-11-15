@@ -753,3 +753,41 @@ test('digest：既没有 text 也没有 path 时报中文错误', async () => {
     await assert.rejects(() => tools.digest({ text: '' }), /text|path/)
   })
 })
+
+test('assign：tools 白名单自动补 master_report/master_board，并在结果里回显', async () => {
+  const { tools, spawn } = createDeps()
+  const result = await tools.assign({
+    label: 'ticket-1',
+    brief: { goal: '完成票 1' },
+    tools: ['read', 'write', 'pwsh'],
+  })
+  assert.deepEqual(spawn.calls[0].tools, ['read', 'write', 'pwsh', 'master_report', 'master_board'])
+  assert.deepEqual(result.tools, ['read', 'write', 'pwsh', 'master_report', 'master_board'])
+  assert.equal(result.ok, true)
+})
+
+test('assign：不传 tools 时不下发 tools 字段（交回宿主默认）', async () => {
+  const { tools, spawn } = createDeps()
+  const result = await tools.assign({ label: 'x', brief: { goal: 'y' } })
+  assert.equal('tools' in spawn.calls[0], false)
+  assert.equal(result.tools, null)
+})
+
+test('assign：tools 非法时报中文错误，且不写台账、不开子会话', async () => {
+  const { tools, spawn, ledger } = createDeps()
+  await assert.rejects(() => tools.assign({ label: 'x', brief: { goal: 'y' }, tools: 'read' }), ToolsError)
+  await assert.rejects(() => tools.assign({ label: 'x', brief: { goal: 'y' }, tools: [''] }), /非空字符串/)
+  await assert.rejects(() => tools.assign({ label: 'x', brief: { goal: 'y' }, tools: ['read', 2] }), ToolsError)
+  assert.equal(spawn.calls.length, 0)
+  assert.equal(ledger.calls.append.length, 0)
+})
+
+test('assign：childToolExtras 配置生效（默认补两个交接工具，空数组则不补）', async () => {
+  const none = createDeps({ config: { childToolExtras: [] } })
+  await none.tools.assign({ label: 'x', brief: { goal: 'y' }, tools: ['read'] })
+  assert.deepEqual(none.spawn.calls[0].tools, ['read'], '显式空数组表示一个都不补')
+
+  const onlyReport = createDeps({ config: { childToolExtras: ['master_report'] } })
+  await onlyReport.tools.assign({ label: 'x', brief: { goal: 'y' }, tools: ['read'] })
+  assert.deepEqual(onlyReport.spawn.calls[0].tools, ['read', 'master_report'])
+})

@@ -63,3 +63,21 @@ test('board/ledger 落在 root 目录内', () => {
   assert.equal(boardFile(config, 'root-1', env), join(dir, 'board.jsonl'))
   assert.equal(ledgerFile(config, 'root-1', env), join(dir, 'ledger.jsonl'))
 })
+
+test('master 配置：默认值、标题非空、工具列表校验', () => {
+  const defaults = validateConfig({})
+  assert.equal(defaults.masterEnabled, true)
+  assert.equal(defaults.masterTitle, 'Master')
+  assert.equal(defaults.masterTools, null)
+  assert.equal(defaults.childToolExtras, null)
+
+  assert.throws(() => validateConfig({ masterTitle: '   ' }), /masterTitle/)
+  assert.throws(() => validateConfig({ masterEnabled: 'yes' }), /masterEnabled/)
+  assert.throws(() => validateConfig({ masterTools: 'read' }), /masterTools/)
+  assert.throws(() => validateConfig({ masterTools: [] }), /masterTools/)
+  assert.throws(() => validateConfig({ masterTools: ['read', ' '] }), /masterTools/)
+  assert.throws(() => validateConfig({ childToolExtras: ['read', 1] }), /childToolExtras/)
+
+  assert.deepEqual(validateConfig({ masterTools: [' read ', 'read', 'write'] }).masterTools, ['read', 'write'])
+  assert.deepEqual(validateConfig({ childToolExtras: [] }).childToolExtras, [])
+})
