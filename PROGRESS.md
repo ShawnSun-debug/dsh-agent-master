@@ -8,7 +8,7 @@
 - 模块契约：`.scratch/interfaces.md`（含 deck 契约 v1.1；v1.2 待 T5 落地：deck 事件改追加到 root 会话）。
 - DSH API 查实笔记：`.scratch/api-notes.md`（含行号证据，改代码前先看它，别猜 API）。
 - 测试：`npm test`（`scripts/test.mjs`；本机 `%TEMP%` 对沙箱进程不可写，脚本把 TEMP 指到 `.test-tmp`）。
-- 当前：**118 个测试全绿**，最新提交 `282b278`。
+- 当前：**157 个测试全绿**，最新提交 `8f5e3b5`；插件已装进 desktop profile，**待重启 DSH 验证**。
 
 ## 2. 已完成（含提交）
 
@@ -30,9 +30,8 @@
 ## 4. 下一步
 
 1. 收口 T5/T6/T7 → 全量 `npm test` → 提交。
-2. T8：把包装进 `%USERPROFILE%\.dsh\profiles\desktop`（`dependencies` 用 `link:` + `dsh.profile.bundles` 追加），**重启 DSH 后**跑三场景 E2E。
-   - 注意：重启 DSH 会结束当前会话，必须由用户操作或下次会话执行。
-3. 三场景：并行调研（3 路 + web_search + 引用去重）、并行改码（2 路 + artifact）、冷恢复接力（重启后 send_message 续聊 + 黑板仍在）。
+2. **重启 DSH**（会结束当前会话，必须由用户操作），然后按 `docs/e2e-checklist.md` 勾完三场景。
+3. 三场景细节已在清单里：并行调研 / 并行改码 / 冷恢复接力。
 4. README/CHANGELOG 补完。
 
 ## 5. 雷区（踩过的）
