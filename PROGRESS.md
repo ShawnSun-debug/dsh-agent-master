@@ -22,7 +22,8 @@
 
 ## 3. 进行中
 
-- T5 返工：deck 事件追加目标改为 **root 会话**（v1.2），防止子对话回报不刷新面板。
+- T5 v1.2 ✅ 已提交（\`2e04eb3\`）
+- T8：装包完成（link + bundles），T7 成果接线中（\`impl-t8-wire\`）；重启验收清单见 \`docs/e2e-checklist.md\`
 - T6：客户端指挥台（`client/client.js`），点击卡片打开对应子对话 tab。
 - T7：**已交付** `lib/sources.js`（来源去重/冲突标记）+ `lib/dispatch.js`（派发五档阶梯），29 例单测全绿；**纯函数、未接线** `tools.js`/`index.js`（接线留待后续票）。
 
