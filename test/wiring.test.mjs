@@ -8,6 +8,7 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { existsSync } from 'node:fs'
 import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -23,7 +24,6 @@ import { TOOL_NAMES } from '../lib/tools.js'
 function fakeCtx(options = {}) {
   const calls = { tools: [], sections: [], projections: [], effects: [], activations: [], disposals: [] }
   const ctx = {
-    state: {},
     effect(execute, label) {
       calls.effects.push(label)
       const result = execute()
@@ -336,7 +336,7 @@ test('wiring：两路不同子对话各自回报 → deck 两行，master_collec
   }
 })
 
-test('wiring：rootOf 抛错时兜底用 exec.agent.id，并记进 ctx.state 供排查', async () => {
+test('wiring：rootOf 抛错时兜底用 exec.agent.id，工具照常工作', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'am-wire-'))
   try {
     const { ctx, calls } = fakeCtx({
@@ -349,12 +349,8 @@ test('wiring：rootOf 抛错时兜底用 exec.agent.id，并记进 ctx.state 供
 
     const head = await findTool(calls, 'master_board').execute({ op: 'head' }, { agent })
     assert.deepEqual(head, { seq: 0 })
-    const fallbacks = ctx.state.agentMaster.rootFallbacks
-    assert.equal(fallbacks.length, 1)
-    assert.equal(fallbacks[0].sessionId, 'sess-x')
-    assert.match(fallbacks[0].reason, /rootOf/)
-    // 兜底之后目录按兜底 id 建
-    assert.equal(typeof ctx.state.agentMaster.config, 'object')
+    // 兜底之后目录按兜底 id 建（rootOf 不可用不该让工具失败）
+    assert.ok(existsSync(join(dir, 'sess-x')), '兜底 rootId 应落在 sess-x 目录')
   } finally {
     await rm(dir, { recursive: true, force: true })
   }
@@ -379,13 +375,14 @@ test('wiring：只有 assign/report/collect 追加 deck 事件，只读工具不
   }
 })
 
-test('wiring：disposer 清理 ctx.state.agentMaster，二次调用是 no-op', async () => {
+test('wiring：disposer 逆序回卷全部注册，二次调用是 no-op', async () => {
   const { ctx, calls } = fakeCtx()
   const dispose = await apply(ctx, {})
-  assert.equal(ctx.state.agentMaster.config.maxChildren, 4)
 
   dispose()
-  assert.equal(ctx.state.agentMaster, undefined)
+  // 投影的 effect 返回 Promise<disposer>，回卷要等一个 tick 才落地
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  assert.equal(calls.disposals.length, calls.effects.length, '每个 effect 都要回卷一次')
 
   const before = calls.disposals.length
   dispose()
@@ -399,7 +396,6 @@ test('wiring：非法配置让 apply 拒绝，且不在 ctx 上留下任何注�
   assert.deepEqual(calls.sections, [])
   assert.deepEqual(calls.projections, [])
   assert.deepEqual(calls.effects, [])
-  assert.equal(ctx.state.agentMaster, undefined)
 })
 
 test('wiring：deck 事件追加到 root 会话，不是发起调用的子会话', async () => {
@@ -461,8 +457,30 @@ test('wiring：rootOf 抛错时 deck 降级追加到调用方会话，工具仍�
     const events = agent.appended.filter((event) => event.type === 'agent-master/deck')
     assert.equal(events.length, 1)
     assert.equal(events[0].payload.deck.headSeq, 0)
-    assert.equal(ctx.state.agentMaster.rootFallbacks.length, 1)
   } finally {
     await rm(dir, { recursive: true, force: true })
   }
+})
+
+/**
+ * 严格 ctx：模拟真 cordis 的 context 代理 —— 访问 inject 之外、又不是核心成员或服务的属性，
+ * 会抛 `cannot get property "X" without inject`。
+ * 这条用例存在的理由：宽容的假 ctx 把 ctx.state 当普通属性放过了，
+ * 结果 157 个测试全绿、真宿主一启动就 failed（2026-11-16 实测诊断原文）。
+ */
+test('wiring：严格 ctx（访问未注入属性即抛）下 apply 仍能完成', async () => {
+  const { ctx: inner, calls } = fakeCtx()
+  const ALLOWED = new Set(['effect', 'on', 'emit', 'get', 'logger', 'then', 'constructor', ...inject])
+  const strict = new Proxy(inner, {
+    get(target, prop, receiver) {
+      if (typeof prop === 'symbol') return Reflect.get(target, prop, receiver)
+      if (ALLOWED.has(prop)) return Reflect.get(target, prop, receiver)
+      throw new Error(`cannot get property "${String(prop)}" without inject`)
+    },
+  })
+
+  const dispose = await apply(strict, {})
+  assert.equal(typeof dispose, 'function')
+  assert.equal(calls.tools.length, TOOL_NAMES.length)
+  dispose()
 })

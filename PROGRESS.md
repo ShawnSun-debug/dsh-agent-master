@@ -8,7 +8,16 @@
 - 模块契约：`.scratch/interfaces.md`（含 deck 契约 v1.1；v1.2 待 T5 落地：deck 事件改追加到 root 会话）。
 - DSH API 查实笔记：`.scratch/api-notes.md`（含行号证据，改代码前先看它，别猜 API）。
 - 测试：`npm test`（`scripts/test.mjs`；本机 `%TEMP%` 对沙箱进程不可写，脚本把 TEMP 指到 `.test-tmp`）。
-- 当前：**157 个测试全绿**，最新提交 `8f5e3b5`；插件已装进 desktop profile，**待重启 DSH 验证**。
+- 当前：**158 个测试全绿**；插件已装进 desktop profile。
+
+## 修复记录：真宿主首次加载 failed（2026-11-16）
+
+- 现象：插件列表 `dsh-agent-master` 一行标红「异常」，诊断原文 `cannot get property "state" without inject`。
+- 根因：`lib/index.js` 用 `ctx.state` 存诊断。cordis 的 ctx 是**服务代理**，访问 `inject` 之外的名字直接抛错。
+- 为什么测试没挡住：假 ctx 里有 `state: {}` 这个属性，把真实宿主不放行的东西放行了。
+- 修复：诊断改为闭包内变量，不再往 ctx 上挂任何自定义字段。
+- 防回归：`test/wiring.test.mjs` 新增「严格 ctx」用例——用 Proxy 复刻 cordis 规则，访问白名单外属性即抛。
+- 同时修掉的：三个旧用例把「往 ctx.state 写诊断」当契约，属于把 bug 写成断言，已改为断言注册面与回卷行为。
 
 ## 2. 已完成（含提交）
 

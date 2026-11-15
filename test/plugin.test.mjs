@@ -19,7 +19,6 @@ function fakeCtx() {
   return {
     calls,
     ctx: {
-      state: {},
       effect(execute) {
         const result = execute()
         return typeof result === 'function' ? result : () => {}
@@ -63,19 +62,16 @@ test('插件导出名与注入契约存在', () => {
 test('非法配置在装载期就抛错，且不留下半初始化状态', async () => {
   const { ctx, calls } = fakeCtx()
   await assert.rejects(apply(ctx, { maxChildren: 0 }), AgentMasterConfigError)
-  // 半初始化状态：ctx.state 上没有 agentMaster，三个注册面一条都没留下
-  assert.equal(ctx.state.agentMaster, undefined)
+  // 半初始化状态：三个注册面一条都没留下
   assert.deepEqual(calls.tools, [])
   assert.deepEqual(calls.sections, [])
   assert.deepEqual(calls.projections, [])
 })
 
-test('apply 校验配置、写入 ctx.state，并注册 5 工具 + 1 提示词 + 1 投影', async () => {
+test('apply 注册 5 工具 + 1 提示词 + 1 投影，并返回 disposer', async () => {
   const { ctx, calls } = fakeCtx()
   const dispose = await apply(ctx, { maxChildren: 2 })
 
-  assert.equal(ctx.state.agentMaster.config.maxChildren, 2)
-  assert.ok(Object.isFrozen(ctx.state.agentMaster.config))
   assert.deepEqual(calls.tools, [...TOOL_NAMES])
   assert.equal(calls.sections.length, 1)
   assert.equal(calls.sections[0].name, 'agent-master:master')
@@ -86,10 +82,9 @@ test('apply 校验配置、写入 ctx.state，并注册 5 工具 + 1 提示词 +
   assert.equal(typeof dispose, 'function')
 })
 
-test('disposer 清理 ctx.state.agentMaster，二次调用是 no-op', async () => {
+test('disposer 可安全调用，二次调用是 no-op', async () => {
   const { ctx } = fakeCtx()
   const dispose = await apply(ctx, {})
   dispose()
-  assert.equal(ctx.state.agentMaster, undefined)
   assert.doesNotThrow(() => dispose())
 })
