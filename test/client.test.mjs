@@ -465,3 +465,101 @@ test('缺 sessionId 或右栏服务时卡片不挂点击、点击也不抛错', 
     console.warn = originalWarn
   }
 })
+
+test('client：deckBadge 折出「还没回报/总数」，违规则转危险色', () => {
+  const { exported } = loadClient()
+  assert.equal(exported.deckBadge(null).text, exported.constants.DECK_TITLE)
+
+  const badge = exported.deckBadge({
+    counts: { tasks: 3, findings: 1, sources: 0, artifacts: 0, violations: 0 },
+    children: [{ status: 'assigned' }, { status: 'reported' }, { status: 'violated' }],
+  })
+  assert.equal(badge.total, 3)
+  assert.equal(badge.running, 2, 'assigned 与 violated 都算还没回报')
+  assert.equal(badge.violated, true)
+  assert.equal(badge.tone, 'danger')
+  assert.match(badge.text, /2\/3/)
+
+  const allDone = exported.deckBadge({
+    counts: { tasks: 1, findings: 1, sources: 0, artifacts: 0, violations: 0 },
+    children: [{ status: 'reported' }],
+  })
+  assert.equal(allDone.running, 0)
+  assert.equal(allDone.tone, 'success')
+})
+
+test('client：openDeckTab 调 sidebarRight.openTab(TAB_KIND)；服务缺失时返回 false 不抛', () => {
+  const { exported } = loadClient()
+  const calls = []
+  const ctx = {
+    get: (name) =>
+      name === 'sidebarRight'
+        ? {
+            openResource() {},
+            openTab(kind, options) {
+              calls.push({ kind, options })
+            },
+          }
+        : undefined,
+  }
+  assert.equal(exported.openDeckTab(ctx), true)
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0].kind, exported.constants.TAB_KIND)
+
+  assert.equal(exported.openDeckTab({}), false, '没有服务时优雅降级')
+
+  const thrower = { get: () => ({ openResource() {}, openTab() { throw new Error('boom') } }) }
+  assert.equal(exported.openDeckTab(thrower), false, 'openTab 抛错也不能打断渲染')
+})
+
+test('client：apply 注册左栏入口与会话头计数两个座位，注入 openDeck', () => {
+  const { exported } = loadClient()
+  const { ctx, seats } = fakeCtx()
+  exported.apply(ctx)
+
+  const entry = seats.find((seat) => seat.options.name === 'sidebar.footer.action')
+  assert.ok(entry, '必须注册 sidebar.footer.action（左栏入口）')
+  assert.equal(entry.options.id, exported.constants.FOOTER_ACTION_ID)
+
+  const pill = seats.find((seat) => seat.options.name === 'conversation.session.header.utilities')
+  assert.ok(pill, '必须注册 conversation.session.header.utilities（会话头计数）')
+  assert.equal(pill.options.id, exported.constants.HEADER_UTILITY_ID)
+
+  // 两个座位都要拿到 openDeck 闭包
+  for (const seat of [entry, pill]) {
+    const injected = seat.options.inject()
+    assert.equal(typeof injected.openDeck, 'function')
+  }
+})
+
+test('client：会话头胶囊渲染出「1/2」并绑定点击；左栏入口点了会调 openTab', () => {
+  const { exported } = loadClient()
+  const { ctx, seats } = fakeCtx()
+  let deckOpened = 0
+  // 用真实座位注册，但把 openDeck 计数替换掉，验证点击链路
+  const originalApply = exported.apply
+  exported.apply(ctx)
+  const pillSeat = seats.find((seat) => seat.options.name === 'conversation.session.header.utilities')
+  const injected = pillSeat.options.inject({})
+  const state = {
+    counts: { tasks: 2, findings: 1, sources: 0, artifacts: 0, violations: 0 },
+    children: [{ status: 'assigned' }, { status: 'reported' }],
+  }
+  const pillProps = { ...injected, sessionId: 's1', useProjection: () => state, openDeck: () => { deckOpened += 1 } }
+  const pillNode = pillSeat.Component(pillProps)
+  const pillText = collectText(pillNode).join(' ')
+  assert.match(pillText, /1\/2/, '胶囊应显示 还没回报/总数')
+
+  const pillClick = findClickable(pillNode, '指挥台')
+  assert.equal(typeof pillClick, 'function')
+  pillClick()
+  assert.equal(deckOpened, 1)
+
+  // 左栏入口：纯按钮 + openDeck
+  const entrySeat = seats.find((seat) => seat.options.name === 'sidebar.footer.action')
+  const entryNode = entrySeat.Component({ ...entrySeat.options.inject({}), openDeck: () => { deckOpened += 1 } })
+  assert.equal(collectText(entryNode).join(' '), exported.constants.DECK_TITLE)
+  const entryClick = findClickable(entryNode, exported.constants.DECK_TITLE)
+  entryClick()
+  assert.equal(deckOpened, 2)
+})

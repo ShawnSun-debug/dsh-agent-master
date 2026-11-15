@@ -8,7 +8,7 @@
 - 模块契约：`.scratch/interfaces.md`（含 deck 契约 v1.1；v1.2 待 T5 落地：deck 事件改追加到 root 会话）。
 - DSH API 查实笔记：`.scratch/api-notes.md`（含行号证据，改代码前先看它，别猜 API）。
 - 测试：`npm test`（`scripts/test.mjs`；本机 `%TEMP%` 对沙箱进程不可写，脚本把 TEMP 指到 `.test-tmp`）。
-- 当前：**158 个测试全绿**；插件已装进 desktop profile。
+- 当前：**162 个测试全绿**；插件已装进 desktop profile。
 
 ## 修复记录：真宿主首次加载 failed（2026-11-16）
 

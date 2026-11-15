@@ -212,6 +212,64 @@ window.__ModuleLoader__.load({
      * state 为 null（宿主尚无任何记录）时返回空态，其余字段照样有值，渲染层不需要判空。
      * @param {unknown} state 投影 key = 'agentMaster' 的值
      */
+    /** 左栏底部入口 id（root 作用域）。 */
+    var FOOTER_ACTION_ID = 'agent-master:deck-entry'
+
+    /** 会话头计数 id（session 作用域）。 */
+    var HEADER_UTILITY_ID = 'agent-master:deck-count'
+
+    /**
+     * 从投影折出「一眼可见」的徽标。
+     * root 作用域（左栏）拿不到投影，所以数字只放在 session 作用域的会话头。
+     *
+     * @returns {{ text: string, total: number, running: number, violated: boolean, tone: string }}
+     */
+    function deckBadge(state) {
+      var model = viewModel(state)
+      if (model.empty) {
+        return { text: DECK_TITLE, total: 0, running: 0, violated: false, tone: 'muted' }
+      }
+      var running = 0
+      var violated = false
+      for (var index = 0; index < model.children.length; index += 1) {
+        var card = model.children[index]
+        if (card.status === 'reported') continue
+        if (card.status === 'violated') violated = true
+        running += 1
+      }
+      if (model.counts.violations > 0) violated = true
+      var total = model.children.length
+      var shown = running > 0 ? running : total
+      return {
+        text: total === 0 ? DECK_TITLE : DECK_TITLE + ' ' + shown + '/' + total,
+        total: total,
+        running: running,
+        violated: violated,
+        tone: violated ? 'danger' : running > 0 ? 'muted' : 'success',
+      }
+    }
+
+    /**
+     * 打开右栏指挥台 tab：官方服务是 sidebarRight，方法 openTab(kind, options)
+     * （dsh-client-ui-sidebar-right/src/client/index.ts 的 controller.openTab）。
+     *
+     * @returns {boolean} 服务缺失或抛错时 false，调用方无需处理
+     */
+    function openDeckTab(ctx) {
+      var service = resolveSidebarRight(ctx)
+      if (service === null || typeof service.openTab !== 'function') {
+        warn('agent-master 客户端：sidebarRight.openTab 不可用，无法打开指挥台。')
+        return false
+      }
+      try {
+        service.openTab(TAB_KIND, {})
+        return true
+      } catch (error) {
+        warn('agent-master 客户端：打开指挥台标签失败。', error)
+        return false
+      }
+    }
+
     function viewModel(state) {
       if (state === null || state === undefined) {
         var emptyCounts = normalizeCounts(null)
@@ -275,6 +333,30 @@ window.__ModuleLoader__.load({
         background: 'rgba(220, 38, 38, 0.10)',
         border: '1px solid ' + TONE_COLORS.danger,
         color: TONE_COLORS.danger,
+      },
+      footerButton: {
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: '6px',
+        padding: '4px 8px',
+        borderRadius: '6px',
+        border: '1px solid var(--dsh-border, #e5e7eb)',
+        background: 'transparent',
+        color: 'inherit',
+        cursor: 'pointer',
+        fontSize: '12px',
+      },
+      pill: {
+        display: 'inline-flex',
+        alignItems: 'center',
+        padding: '2px 8px',
+        borderRadius: '999px',
+        border: '1px solid var(--dsh-border, #e5e7eb)',
+        background: 'transparent',
+        color: 'inherit',
+        cursor: 'pointer',
+        fontSize: '11px',
+        whiteSpace: 'nowrap',
       },
       cards: { display: 'flex', flexDirection: 'column', gap: '8px' },
       card: {
@@ -432,6 +514,45 @@ window.__ModuleLoader__.load({
      * props 来自 session 作用域 seat：sessionId 与 useProjection；openChild 由本插件在
      * stage2 的 inject 里注入（点击卡片时用它按官方寻址打开子会话 tab）。
      */
+    /** 左栏底部入口：root 作用域没有投影，所以只负责「进得去」。 */
+    function SidebarDeckEntry(props) {
+      return h(
+        'button',
+        {
+          type: 'button',
+          title: DECK_TITLE,
+          'data-agent-master': 'deck-entry',
+          style: STYLES.footerButton,
+          onClick: function () {
+            if (props && typeof props.openDeck === 'function') props.openDeck()
+          },
+        },
+        DECK_TITLE,
+      )
+    }
+
+    /** 会话头胶囊：session 作用域有 useProjection，能显示「还没回报/总数」。 */
+    function HeaderDeckPill(props) {
+      var badge = deckBadge(readProjection(props))
+      var style = STYLES.pill
+      if (badge.tone === 'danger' || badge.tone === 'success') {
+        style = Object.assign({}, style, { color: TONE_COLORS[badge.tone] })
+      }
+      return h(
+        'button',
+        {
+          type: 'button',
+          title: DECK_TITLE,
+          'data-agent-master': 'deck-pill',
+          style: style,
+          onClick: function () {
+            if (props && typeof props.openDeck === 'function') props.openDeck()
+          },
+        },
+        badge.text,
+      )
+    }
+
     function DeckPanel(props) {
       // hooks 规则：useProjection 必须无条件调用，所以放在所有分支之前。
       var state = readProjection(props)
@@ -632,9 +753,9 @@ window.__ModuleLoader__.load({
     }
 
     /** 正常路径：stage1 声明 tab 类型，stage2 按同一个 id 挂正文与标题。 */
-    function installSidebarSeats(ctx, translate, openChild) {
-      // openChild 在 apply 里只造一次，注入的 props 也保持同一引用，避免每次渲染都换新对象。
-      var injectedProps = { openChild: openChild }
+    function installSidebarSeats(ctx, translate, openChild, openDeck) {
+      // openChild / openDeck 在 apply 里只造一次，注入的 props 也保持同一引用，避免每次渲染都换新对象。
+      var injectedProps = { openChild: openChild, openDeck: openDeck }
       effect(ctx, function () {
         return ctx.sidebarRightTabs.register({
           id: TAB_ID,
@@ -668,6 +789,40 @@ window.__ModuleLoader__.load({
           return ctx.slots.register({ name: 'sidebar.right.pane.tab.title', key: TAB_ID }, DeckTabTitle)
         })
       }, 'agent-master: 指挥台标签标题')
+
+      // 会话头胶囊：session 作用域，能读投影，所以「还没回报/总数」放这里。
+      effect(ctx, function () {
+        return ctx.slots.inject('conversation.session.header.utilities', function () {
+          return ctx.slots.register(
+            {
+              name: 'conversation.session.header.utilities',
+              id: HEADER_UTILITY_ID,
+              order: 100,
+              inject: function () {
+                return injectedProps
+              },
+            },
+            HeaderDeckPill,
+          )
+        })
+      }, 'agent-master: 会话头计数')
+
+      // 左栏底部入口：root 作用域，点了直接把右栏指挥台打开。
+      effect(ctx, function () {
+        return ctx.slots.inject('sidebar.footer.action', function () {
+          return ctx.slots.register(
+            {
+              name: 'sidebar.footer.action',
+              id: FOOTER_ACTION_ID,
+              order: 100,
+              inject: function () {
+                return injectedProps
+              },
+            },
+            SidebarDeckEntry,
+          )
+        })
+      }, 'agent-master: 左栏入口')
     }
 
     /** 降级路径：右栏不可用时挂到 shell.overlay（root 作用域，没有 useProjection）。 */
@@ -684,9 +839,12 @@ window.__ModuleLoader__.load({
       }
       var translate = makeTranslator(ctx)
       var openChild = makeChildOpener(ctx)
+      var openDeck = function () {
+        return openDeckTab(ctx)
+      }
       if (ctx.sidebarRightTabs && typeof ctx.sidebarRightTabs.register === 'function') {
         try {
-          installSidebarSeats(ctx, translate, openChild)
+          installSidebarSeats(ctx, translate, openChild, openDeck)
           return
         } catch (error) {
           warn('agent-master 客户端：右侧栏座位注册失败，退回 shell.overlay。', error)
@@ -707,6 +865,8 @@ window.__ModuleLoader__.load({
     exports.kindLabel = kindLabel
     exports.countItems = countItems
     exports.chatAddress = chatAddress
+    exports.deckBadge = deckBadge
+    exports.openDeckTab = openDeckTab
     exports.constants = Object.freeze({
       PACKAGE_ID: PACKAGE_ID,
       TAB_ID: TAB_ID,
@@ -717,6 +877,8 @@ window.__ModuleLoader__.load({
       DECK_TITLE: DECK_TITLE,
       CHAT_ADDRESS_PREFIX: CHAT_ADDRESS_PREFIX,
       DEFAULT_CHAT_MODE: DEFAULT_CHAT_MODE,
+      FOOTER_ACTION_ID: FOOTER_ACTION_ID,
+      HEADER_UTILITY_ID: HEADER_UTILITY_ID,
     })
     return module.exports
   },
