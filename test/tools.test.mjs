@@ -540,6 +540,123 @@ test('collect：waitMs 内等到迟到的孩子回报', async () => {
 })
 
 // ---------------------------------------------------------------------------
+// master_collect 的 sources 字段（T8 接线：消费 lib/sources.js 的来源聚合）
+// ---------------------------------------------------------------------------
+
+test('collect：同一 url 两段不同引文 → sources 里该来源 conflict=true 且 quotes 长度 2', async () => {
+  const { tools, board } = createDeps()
+  await board.append({
+    author: { sessionId: 's-alpha', name: 'alpha' },
+    kind: 'source',
+    title: 'https://example.com/a2a',
+    body: 'artifact 绑定 contextId',
+    refs: ['https://example.com/a2a'],
+    tags: ['evidence'],
+  })
+  // 末尾斜杠：黑板去重键不同，但 lib/sources.js 会归成同一来源
+  await board.append({
+    author: { sessionId: 's-beta', name: 'beta' },
+    kind: 'source',
+    title: 'https://example.com/a2a/',
+    body: 'artifact 绑定 taskId',
+    refs: ['https://example.com/a2a/'],
+    tags: ['evidence'],
+  })
+
+  const result = await tools.collect()
+  assert.equal(result.sources.sources.length, 1)
+  const [source] = result.sources.sources
+  assert.equal(source.conflict, true)
+  assert.equal(source.quotes.length, 2)
+  assert.deepEqual(source.quotes.map((item) => item.by), ['alpha', 'beta'])
+  assert.deepEqual(source.quotes.map((item) => item.quote), ['artifact 绑定 contextId', 'artifact 绑定 taskId'])
+  assert.equal(result.sources.duplicates, 0)
+  assert.equal(typeof source.conflictReason, 'string')
+})
+
+test('collect：同一 url 同一 quote 两条 → quotes 只留 1 条且 duplicates≥1', async () => {
+  const { tools, board } = createDeps()
+  await board.append({
+    author: { sessionId: 's-alpha', name: 'alpha' },
+    kind: 'source',
+    title: 'https://example.com/a2a',
+    body: '同一段引文',
+    refs: ['https://example.com/a2a'],
+    tags: ['evidence'],
+  })
+  // 末尾斜杠让黑板去重键不同（黑板不会吞掉第二条），但聚合器按同一来源去重
+  await board.append({
+    author: { sessionId: 's-beta', name: 'beta' },
+    kind: 'source',
+    title: 'https://example.com/a2a/',
+    body: '同一段引文',
+    refs: ['https://example.com/a2a/'],
+    tags: ['evidence'],
+  })
+
+  const result = await tools.collect()
+  assert.equal(result.sources.sources.length, 1)
+  const [source] = result.sources.sources
+  assert.equal(source.quotes.length, 1)
+  assert.equal(source.quotes[0].quote, '同一段引文')
+  assert.equal(source.conflict, false)
+  assert.ok(result.sources.duplicates >= 1, '重复引文应计入 duplicates：' + JSON.stringify(result.sources))
+})
+
+test('collect：names 过滤后只聚合被点名子对话的来源（另一个子对话的来源不出现）', async () => {
+  const { tools, board } = createDeps()
+  await board.append({
+    author: { sessionId: 's-alpha', name: 'alpha' },
+    kind: 'source',
+    title: 'https://example.com/a2a',
+    body: 'alpha 的引文',
+    refs: ['https://example.com/a2a'],
+    tags: ['evidence'],
+  })
+  await board.append({
+    author: { sessionId: 's-beta', name: 'beta' },
+    kind: 'source',
+    title: 'https://example.com/beta',
+    body: 'beta 的引文',
+    refs: ['https://example.com/beta'],
+    tags: ['evidence'],
+  })
+
+  const all = await tools.collect()
+  assert.deepEqual(all.sources.sources.map((item) => item.url).sort(), [
+    'https://example.com/a2a',
+    'https://example.com/beta',
+  ])
+
+  const filtered = await tools.collect({ names: ['alpha'] })
+  assert.equal(filtered.children.length, 1)
+  assert.deepEqual(filtered.sources.sources.map((item) => item.url), ['https://example.com/a2a'])
+  assert.equal(
+    filtered.sources.sources.some((item) => item.url === 'https://example.com/beta'),
+    false,
+    '未被点名的子对话来源不得混进来',
+  )
+})
+
+test('collect：板上没有 source 记录时 sources 为 { sources: [], duplicates: 0 } 且不抛', async () => {
+  const { tools, board } = createDeps()
+  await board.append({
+    author: { sessionId: 's-alpha', name: 'alpha' },
+    kind: 'finding',
+    title: 'finding · t1',
+    body: '摘要',
+    refs: ['t1'],
+    tags: ['report'],
+  })
+
+  const result = await tools.collect()
+  assert.deepEqual(result.sources, { sources: [], duplicates: 0 })
+  // 其余字段照旧
+  assert.deepEqual(result.children.map((child) => child.name), ['alpha'])
+  assert.deepEqual(result.missing, [])
+})
+
+// ---------------------------------------------------------------------------
 // master_board
 // ---------------------------------------------------------------------------
 

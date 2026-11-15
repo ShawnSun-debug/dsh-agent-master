@@ -455,7 +455,8 @@ test('wiring：rootOf 抛错时 deck 降级追加到调用方会话，工具仍�
     await apply(ctx, { dataDir: dir })
 
     const collected = await findTool(calls, 'master_collect').execute({}, { agent })
-    assert.deepEqual(collected, { children: [], missing: [] })
+    // collect 返回形状是公共契约（宿主/客户端/下游都按它读）：新增字段必须同步更新这里，防止下游漏字段。
+    assert.deepEqual(collected, { children: [], missing: [], sources: { sources: [], duplicates: 0 } })
     // 降级：事件仍落在本次调用方会话上，没有丢，工具结果也不受影响
     const events = agent.appended.filter((event) => event.type === 'agent-master/deck')
     assert.equal(events.length, 1)

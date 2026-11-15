@@ -44,6 +44,17 @@ test('master section 覆盖：何时拆、拆几个、brief 必填、不塞原�
   assert.ok(text.includes(String(DEFAULTS.maxChildren)), '默认配置下也要出现数字')
 })
 
+test('master section 写进派发五档阶梯，并强调预算纪律与原文前提', () => {
+  const text = renderSection({ role: 'master' })
+  // 五档标识全部出现（防回归：漏一档就失败）
+  for (const strategy of ['summary', 'original', 'skip', 'escalate', 'board-only']) {
+    assert.ok(text.includes(strategy), 'master section 缺少派发档位：' + strategy)
+  }
+  assert.ok(text.includes('master_digest'), '要指向 master_digest 换成指针')
+  assert.ok(text.includes('不要整段转发'), '体积接近预算时不得整段转发')
+  assert.ok(text.includes('摘要已经失败过一次才允许发原文'), 'original 档必须有「摘要先失败过」这个前提')
+})
+
 test('child section 覆盖：必须 master_report、不得改台账、大结果走 artifacts、冲突写 open_questions', () => {
   const text = renderSection({ role: 'child' })
   assert.ok(text.includes('master_report'))
