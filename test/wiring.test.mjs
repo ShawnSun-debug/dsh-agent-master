@@ -279,13 +279,14 @@ test('wiring：master_report 按 namesOf 解析作者，子对话不会被归成
     assert.equal(finding.author.name, 'agent-1')
     assert.equal(finding.author.sessionId, 'sess-child')
 
-    // 2. deck 把这一路算成 reported，而不是留下一行 assigned
-    const deckEvent = child.appended.find((event) => event.type === 'agent-master/deck')
+    // 2. deck 把这一路算成 reported，而不是留下一行 assigned；事件落在 root 会话（v1.2）
+    const deckEvent = rootAgent.appended.filter((event) => event.type === 'agent-master/deck').at(-1)
     assert.ok(deckEvent)
     assert.deepEqual(
       deckEvent.payload.deck.children.map((item) => [item.name, item.status, item.sessionId]),
       [['agent-1', 'reported', 'sess-child']],
     )
+    assert.equal(child.appended.length, 0, '子会话不该收到 deck 事件')
   } finally {
     await rm(dir, { recursive: true, force: true })
   }
@@ -399,4 +400,68 @@ test('wiring：非法配置让 apply 拒绝，且不在 ctx 上留下任何注�
   assert.deepEqual(calls.projections, [])
   assert.deepEqual(calls.effects, [])
   assert.equal(ctx.state.agentMaster, undefined)
+})
+
+test('wiring：deck 事件追加到 root 会话，不是发起调用的子会话', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'am-wire-'))
+  try {
+    const rootAgent = makeAgent('root-1')
+    const child = makeAgent('sess-child')
+    const { ctx, calls } = fakeCtx({
+      rootOf: (agent) => (agent === child ? rootAgent : agent),
+      namesOf: (agent) => (agent === child ? ['agent-1'] : ['master']),
+    })
+    await apply(ctx, { dataDir: dir })
+
+    await findTool(calls, 'master_assign').execute(
+      { label: 'A', brief: { goal: '查清 X' } },
+      { agent: rootAgent },
+    )
+    const rootEventsBefore = rootAgent.appended.filter((event) => event.type === 'agent-master/deck').length
+    assert.equal(child.appended.length, 0)
+
+    await findTool(calls, 'master_report').execute(
+      { taskId: 't1', summary: 'X 成立', findings: [{ text: 'A' }], confidence: 'low' },
+      { agent: child },
+    )
+
+    // 子会话的 session 一个字节都没收到 deck
+    assert.equal(child.appended.length, 0)
+    // root 会话收到 assign + report 两条，最后一条已把子对话算成 reported
+    const rootEvents = rootAgent.appended.filter((event) => event.type === 'agent-master/deck')
+    assert.equal(rootEvents.length, rootEventsBefore + 1)
+    const last = rootEvents.at(-1)
+    assert.deepEqual(
+      last.payload.deck.children.map((item) => [item.name, item.status, item.sessionId]),
+      [['agent-1', 'reported', 'sess-child']],
+    )
+    // deck 基于 rootId 的 Board（与工具同一份黑板）：task + finding 共 2 条
+    assert.equal(last.payload.deck.headSeq, 2)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('wiring：rootOf 抛错时 deck 降级追加到调用方会话，工具仍成功', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'am-wire-'))
+  try {
+    const { ctx, calls } = fakeCtx({
+      rootOf() {
+        throw new Error('rootOf 不可用')
+      },
+      namesOf: () => ['agent-x'],
+    })
+    const agent = makeAgent('sess-x')
+    await apply(ctx, { dataDir: dir })
+
+    const collected = await findTool(calls, 'master_collect').execute({}, { agent })
+    assert.deepEqual(collected, { children: [], missing: [] })
+    // 降级：事件仍落在本次调用方会话上，没有丢，工具结果也不受影响
+    const events = agent.appended.filter((event) => event.type === 'agent-master/deck')
+    assert.equal(events.length, 1)
+    assert.equal(events[0].payload.deck.headSeq, 0)
+    assert.equal(ctx.state.agentMaster.rootFallbacks.length, 1)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
 })

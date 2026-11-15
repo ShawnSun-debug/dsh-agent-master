@@ -196,7 +196,11 @@ test('deck：纯读——不调 append/get，两次调用互不影响', async ()
   ])
   const first = await buildDeck({ board, rootId: 'root-1' })
   const second = await buildDeck({ board, rootId: 'root-1' })
-  assert.deepEqual(first, second)
+  // updatedAt 是墙钟：两次调用可能跨毫秒，比较除它以外的全部字段
+  const withoutClock = (deck) => ({ ...deck, updatedAt: 0 })
+  assert.deepEqual(withoutClock(first), withoutClock(second))
+  assert.equal(typeof first.updatedAt, 'number')
+  assert.equal(typeof second.updatedAt, 'number')
   // 没有写路径
   assert.ok(!board.calls.includes('append'))
   // children 是独立对象：改第一份不影响第二份

@@ -91,3 +91,17 @@ report 形状（`validateReport` 归一化后返回）：
 - `evidence` 每项必须**至少**有 `url` 或 `path`，且有非空 `quote`；`url` 只接受 http/https。
 - `confidence` 必须是三档之一；`schemaVersion` 缺省补 1，不等于 1 → 抛错（说明版本不支持）。
 - 未知字段忽略，但不得静默丢弃 `findings`/`evidence` 之外的必填项。
+
+## 投影与 deck 契约（v1.1，T5/T6 共用，lead 裁定）
+
+投影 key = `agentMaster`，事件 `agent-master/deck`，payload `{ deck }`，state 形状：
+
+    { headSeq, updatedAt,
+      children: [ { name, label, taskId, sessionId,
+                    status: 'assigned'|'reported'|'violated',
+                    findings, evidence, artifacts, violations } ],
+      counts: { tasks, findings, sources, artifacts, violations },
+      recent: [ { seq, kind, title } ] }
+
+- `sessionId` 来自该孩子黑板记录的 `author.sessionId`；同名多记录取 seq 最小的一条；缺失时为空字符串。
+- 客户端据此拼子会话地址并打开对应 tab；打不开时面板保持只读并显示原因。
