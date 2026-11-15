@@ -183,3 +183,111 @@ T5（投影 + Remote）：先落 projection 作为单一事实源（第 4 条，
     const handle = await ctx.sessionProjections.register({ key: 'agentMaster', stateSchema: { parse: v => v }, init: () => ({ runs: [] }), apply: (s, e) => e.type === 'agent-master/run' ? { runs: [...s.runs, e.data] } : s, wire: { viewSchema: { parse: v => v }, view: s => s }, stateVersion: 1 })
 
 T6（面板）：`sidebarRightTabs.register`（stage 1，id/kind/title/guide）+ `slots.inject('sidebar.right.pane.tab')` 按同一 `key = id` 挂 body（stage 2），标题挂 `...tab.title`；package.json 补 `dsh.client = { platform:'web', inject:['@deepseek-ai/dsh-client-ui-sidebar-right', …] }` 与 `exports['./client']`，构建产物用 `window.__ModuleLoader__.load({ id: '<package.json name>', factory })` 注册。面板数据只读 projection/Remote，不在 client 里重新推导状态。
+
+---
+
+## 补充：客户端读投影（T5 只注册投影、不注册自定义 Remote 的可行性）
+
+### 8.1 完整链路：宿主注册投影 → 客户端读到（以 `todos` 为例）
+
+结论：**通**。宿主是唯一计算点，客户端零领域代码即可读到任意第三方投影 key。链路六段，逐段给证据：
+
+1. 宿主注册（域插件）：`dsh-tool-todo/src/index.ts:124-135` — `register({ key:'todos', stateSchema, init, apply, wire:{ viewSchema, view, summary:false }, stateVersion:2 })`。
+2. 宿主算全量快照：`dsh-api-session-controller/src/history/controller.ts:69-91` — live 会话走 `this.ctx.sessionProjections.snapshot(live)`（`:78`，**不传 keys**），返回 `{ kind:'sequenced', asOfSeq, values }`；非 live 走持久化观察（`:87-90`）。`snapshot` 的过滤规则在 `dsh-session-projection/src/index.ts:514-528`：只保留 `refs !== 0` 且 `def.wire !== undefined` 的注册，**仅当调用方传 keys 时才按 key 过滤**（`:523`）。
+3. 宿主推增量帧：`dsh-api-session-controller/src/control.ts:22-30` — `ctx.sessionProjections.onEventChanged((session, changes, seq) => broadcast({type:'projection', sessionId, seq, changes}))`；基线 `control.ts:55-75` 同样逐 session `snapshot(session)`（`:67`）。
+4. 传输到浏览器：客户端 `dsh-api-session-controller/src/client/transport.ts:201`（`projections: frame.projections`）；补齐读 `client/sessions/manager.ts:351` `this.remote.session.projections({sessionId}, signal)`（Remote 端点 `session/projections`）。
+5. 客户端存值：`dsh-api-session-controller/src/client/sessions/projection-store.ts:1-13` 的文件头明确写：host 是唯一计算点、client 不做领域 fold、"a domain ships projection support with zero client code"；`faceOf(key)` `:106-108` 返回 per-key 稳定 observable。
+6. 组件读：session 标准套件把 keyed hook 命名为 `useProjection` —— `dsh-client-ui-session/src/client/index.ts:266-279`（`BUILTIN_SOURCE = { hooks:['session'], keyedHooks:['projection'], props:['sessionId'], resolve: … projection: key => binding.session.projections.faceOf(key), props:{ sessionId } }`），绑定逻辑 `dsh-client-ui-renderer/src/client/scoped-slots.tsx:496-518`（`standardHookPropName`）。消费样例：`dsh-client-ui-conversation/src/client/skeleton/TodoPanel.tsx:106-107`（`export function TodoDock({ useProjection, t }) … const todos = useProjection('todos')`）。
+   类型面：`UseProjection` 定义为 `ProjectionValueStore.ts:38-45` 的泛型（`(key) => SessionProjectionMap[K] | undefined`，支持 selector 重载）。
+
+### 8.2 第三方投影是否自动对客户端可见？
+
+结论：**是，无 host 白名单/登记**。`snapshot()` 不带 keys 即遍历全部注册（`index.ts:514-528`），推送走 `onEventChanged`（`control.ts:22`）。两个"看似门槛"的点都不是运行时门槛：
+- `SessionProjectionMap` 的 `declare module` 合并只是**编译期**类型（`dsh-session-projection/src/types.ts`；样例 `dsh-client-ui-chat/src/client/chat/StatsPills.tsx:12`、`dsh-client-ui-goal/src/client/index.ts:26` 的注释都写明"pulls the … SessionProjectionMap merge for useProjection"）。
+- `wire.summary:false` 只影响 **session 列表行的 summary**（装配时归一化 `summary: wire.summary !== false`，即省略=true，`index.ts:397-399`；`deriveSummaryKeys` `index.ts:576-584`；`list.ts:313-323` 用 `summaryKeys()`），会话打开后的 baseline/frame 仍然带它。`todos` 就是 `summary:false` 却能在 UI 显示的现成反例（`dsh-tool-todo:133`）。
+
+### 8.3 不注册自定义 Remote 时，客户端拿"黑板/台账"数据的四条路
+
+(a) **投影同步**（推荐其一）：把黑板摘要做成投影，`apply` 从会话事件 fold。代价最低、零 client 代码；限制：状态必须 plain JSON、必须由事件驱动（无事件就没有更新），大文件内容不适合放进 state（每事件都 fold + 每次进 baseline）。
+(b) **复用官方 Remote**（推荐其二，读宿主文件最直接）：`ctx.remote.workspaceFiles` —— 宿主签名 `read(workspaceFileScope, path, range, signal)`（`dsh-api-workspace-files/src/index.ts:246-252`）、`list(scope, path, signal)`（`:316-317`）、`stat`（`:303-304`）、`search`（`:358-360`）、`changes`（watch 帧，`types.ts:202`）。首个参数就是 **sessionId**（`workspaceFileScope`，lookup 派生），client 调用实证 `dsh-client-ui-sidebar-files/src/client/face.ts:64`（`remote.workspaceFiles.changes(sessionId, path, lifetime)`）、`:110`（`remote.workspaceFiles.list(sessionId, path, signal)`）。
+    其余可直接复用的只读命名空间（36 个，从各包 `lib/typert.remote-client.js` 的 `service` 字段抽取）：`sessionController`(session/list,page,state,projections,events,history 读面)、`subagents`(prompt, interruptByUser)、`jobController`(job/list,follow)、`goals`、`agentTeams`、`commands`、`settingsController`、`pluginInventory`、`llm`、`workspaceFiles`、`workspaceController`、`messageFeedback`、`schedule`、`terminal`、`skills`(sessionSkillCatalog)、`fileReferences` 等（完整清单见第 6 节末尾抽取结果/本节末）。**没有通用文件读写之外的"任意宿主 RPC"**，所以要读黑板文件只能走 `workspaceFiles`。
+(c) **会话日志注入消息**：`agent.inject(createUserMessage(...))`（`dsh-agent/src/runtime-types.ts:263-271`）或 pre-step 返回 messages（第 3 条）。能到达浏览器（transcript 本来就会同步），但语义是把数据当对话内容：污染上下文、有 token 成本、客户端要解析文本，**不推荐作为数据通道**。
+(d) **官方 resources**：`dsh-client-resources` 按 `dsh-resource://file/session/<id>/<path>` 地址读文件，sidebar 文件/文档预览用的就是它（`dsh-client-ui-sidebar-files/src/client/face.ts:605-703` 的 open 路径）。比 `workspaceFiles` 多一层地址抽象，若面板要"像文件预览"则更贴合。
+
+推荐：**面板只读数据用 (a)**（结构化摘要、随会话实时），**需要读完整文件时用 (b)**（`remote.workspaceFiles.read/list`），两者都可不动 host 的 Typert 注册。代价：要新增 client 代码，但不需要 generator，也不需要 host 白名单。
+
+### 8.4 sidebarRightTabs 两段式完整骨架（含 sessionId 获取）
+
+关键对应关系：**stage1 的 `id` = stage2 的 `key`**（`dsh-client-ui-sidebar-right/src/client/tab-registry.ts:94-102` 明写"it is the key its body and title register under in the `sidebar.right.pane.tab` and `sidebar.right.pane.tab.title` seats"）。该 seat 声明为 `{kind:'keyed', scope:'session'}`（`src/client/index.ts:246-247`），因此组件拿到的标准套件是 **session 作用域**：`sessionId` 普通 prop + `useSession` + `useProjection`（`dsh-client-ui-session/src/client/index.ts:266-279`），另有该槽注入的 `tabInfo` hook（`tab-info.ts:29-55`，内部用 `standard.sessionId`）。
+
+    // package.json
+    // "dsh": { "client": { "platform": "web", "inject": ["@deepseek-ai/dsh-client-ui-sidebar-right", "@deepseek-ai/dsh-api-session-controller"] } }
+    // "exports": { ".": …, "./client": { "default": "./lib/client.js" } }
+
+    // lib/client.js 产物入口（id 必须等于 package.json 的 name）
+    window.__ModuleLoader__.load({ id: 'dsh-agent-master', factory: require => { /* … */ } })
+
+    // client/index.ts —— 插件必须 inject 的是 Cordis 服务名（见 8.6）
+    export const inject = ['slots', 'locale', 'sidebarRightTabs', 'sessions']
+    const NS = 'agentMaster'
+
+    export function apply(ctx: Context): void {
+      const t = ctx.locale.bind(NS)
+
+      // stage 1：声明 tab 类型（静态；id 就是第二段的 key）
+      ctx.effect(() => ctx.sidebarRightTabs.register({
+        id: 'agent-master:board',          // ← 与 stage 2 的 key 完全一致
+        kind: 'agent-master.board',
+        priority: 'extension',             // 不写默认就是 extension（tab-registry.ts:120）
+        multiple: false,
+        keepMounted: true,
+        title: () => t('board.title'),
+        guide: [{ id: 'board', order: 100, title: () => t('board.title') }],
+      }), 'agent-master: tab type')
+
+      // stage 2：正文按 id 挂到 keyed seat
+      ctx.slots.inject('sidebar.right.pane.tab', () => ctx.slots.register(
+        { name: 'sidebar.right.pane.tab', key: 'agent-master:board', locale: NS },
+        BoardPanel,                       // props: { sessionId, useProjection, useSession, tabInfo, t }
+      ))
+
+      // stage 2b：tab 标题（同一 key）
+      ctx.slots.inject('sidebar.right.pane.tab.title', () => ctx.slots.register(
+        { name: 'sidebar.right.pane.tab.title', key: 'agent-master:board' },
+        () => React.createElement('span', null, t('board.title')),
+      ))
+    }
+
+    // 面板组件：sessionId 与 useProjection 都是 seat 注入的 props，不要自己从 ctx 取
+    function BoardPanel({ sessionId, useProjection }: {
+      sessionId: SessionId
+      useProjection: UseProjection
+    }) {
+      const board = useProjection('agentMaster')     // 第 4 条注册的投影 key
+      return React.createElement(Board, { sessionId, board })
+    }
+
+    注意：只有 **session 作用域**的 seat 才有 `useProjection`/`sessionId`；挂在 root 作用域（如 `shell.overlay`）的组件没有这两项，必须自行从 `ctx.sessions` 选当前会话。
+
+### 8.5 ctx.effect 的签名与返回
+
+结论：`ctx.effect(execute: () => Effect, label?: string)`，`Effect` = 单个 disposer `() => T`、disposer 的 Iterable、或其 Promise/AsyncIterable（`cordis/src/fiber.ts:76-93`）。返回值是"卸载该 effect 的 disposer"，二次调用是 no-op，fiber 卸载时按**逆序**自动执行（`fiber.ts:70-74、411-424`）；fiber 已销毁时抛 `CordisError('INACTIVE_EFFECT')`（`:426-428`）。
+
+    ctx.effect(() => ctx.systemPrompt.section({ name: 'x', order: 9000, text: () => '…' }), 'x: section')
+    // section() 返回 disposer，被 effect 收集；插件卸载即自动注销
+
+官方用法：`dsh-client-ui-sidebar-right/src/client/index.ts:290-306`（`ctx.slots.inject(...)` 包在 effect 里）、`dsh-client-ui-sidebar-files/src/client/index.ts:74-90`（effect + subscribe 清理）、`dsh-plan-mode/src/index.ts:229`（`ctx.effect(() => () => { disposed = true }, '…')`）。
+
+### 8.6 dsh.client.inject 是否强制？必须 inject 哪些服务？
+
+结论：**`package.json` 的 `dsh.client.inject` 不是 Cordis 服务注入**——`dsh-package-manifest/src/types.ts:90-91` 明写 "Informational package-name dependencies, **not** Cordis service injection"。它列的是**包名**，用于装配/构建顺序；真正决定能否用某个服务/seat 的是**插件模块自己导出的 `inject: string[]`（Cordis 服务名）**，缺了会在装配时等待或报错。
+必须 inject 的服务名（client 侧 `Context` 合并实证）：
+    slots                —— 任何 ctx.slots.register/inject（seat 的注册面）
+    sessions             —— 读会话列表/当前会话（dsh-api-session-controller/src/client/index.ts:91-93）
+    uiSession            —— session 作用域来源（dsh-client-ui-session/src/client/index.ts:196-198）
+    sidebarRightTabs     —— tab 类型注册（dsh-client-ui-sidebar-right/src/client/index.ts:92-96）
+    sidebarRight         —— 需要控制面板/标签（同上 :94）
+    remote               —— 任意 Remote 命名空间根（dsh-api-remotes/src/client/index.ts:182-184）
+    remote.<ns>          —— 具体命名空间，如 remote.workspaceFiles（实例见 dsh-client-ui-sidebar-files/src/client/index.ts:64）
+    locale               —— 需要 t()（dsh-client-locale/src/client/index.ts:85-86）
+注意：`useProjection`/`sessionId`/`useSession` 是 **slot 注入的 props**，不需要 inject；但组件必须注册在 session 作用域的 seat 上才拿得到（见 8.4 末尾）。
