@@ -29,7 +29,7 @@
 | T3 | 交接契约渲染与校验 | `70d83d8` |
 | T4 | 五个模型工具 + 分角色提示词 | `b19057e` |
 | T5 | 宿主接线 + agentMaster 投影 + deck | `282b278` |
-| T9 | Master 会话（创建/置顶/标题/工具白名单）+ `master_assign.tools` | 待提交 |
+| T9 | Master 会话（创建/置顶/标题/工具白名单）+ `master_assign.tools` | `ca9af76` |
 
 ## 3. 进行中
 
