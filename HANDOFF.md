@@ -1,7 +1,8 @@
 # HANDOFF — dsh-agent-master
 
 > 一条 master 对话指挥 N 路子对话；共享看板（`board.json`）是唯一事实来源。
-> **T09–T13 五票已全部落地，267 例测试全绿。剩下的是真机验收，不是写码。**
+> **T09–T13 五票已全部落地，272 例测试全绿；工具层已在真宿主（headless + 真模型）跑通全链路。**
+> 剩下只有 GUI 侧三条人工勾选，不是写码。
 
 ## 0. 60 秒上手（按顺序读）
 
@@ -16,8 +17,9 @@
 | 项 | 值 |
 |---|---|
 | 票 | T09 / T10 / T11 / T12 / T13 **全部完成** |
-| 测试 | 18 个文件 / 267 例，全绿（`node scripts/test.mjs`） |
-| 未验证 | 4 条真机项，见 `PROGRESS.md` §4 与 `docs/e2e-checklist.md` |
+| 测试 | 19 个文件 / 272 例，全绿（`node scripts/test.mjs`） |
+| 真机 | 工具层已验：create/claim/doing/report/accept/head/query + 审批 fail-closed（`PROGRESS.md` §3.5） |
+| 未验证 | 3 条 **GUI 侧**，见 `PROGRESS.md` §4 与 `docs/e2e-checklist.md` |
 | 插件 | 已装进 desktop profile（`link:` 指向本仓库，改代码重启即生效） |
 
 ## 2. 文件索引
@@ -43,9 +45,10 @@
 | `lib/index.js` | 宿主接线：七工具、迁移前置、审批门禁、投影、分角色 section、deck 落盘 |
 | `client/client.js` | 指挥台（经典脚本，`__ModuleLoader__`）：六状态/认领者/P 级/v1 占位/轮询兜底/点卡开子对话 |
 
-**测试（18 个文件，按票对号）**
+**测试（19 个文件，按票对号）**
 
-- T09 `board.test.mjs`(33)｜T10 `migrate.test.mjs`(13)｜T11 `gate`(7)/`approval`(15)/`tools`(24)｜T12 `experience`(14)｜T13 `deck`(12)/`client`(17)
+- T09 `board.test.mjs`(33)｜T10 `migrate.test.mjs`(13)｜T11 `gate`(7)/`approval`(15)/`tools`(25)｜T12 `experience`(14)｜T13 `deck`(12)/`client`(17)
+- 宿主契约：`schema.test.mjs`(4)——按宿主 json-schema 子集校验真实输出、检查入参声明齐全
 - 接线与回归：`wiring`(18)、`plugin`(15)、`integration`(1)、`config`(13)、`master`(15)、`ledger`(15)、`sources`(13)、`dispatch`(15)、`handoff`(19)、`sections`(8)
 
 **文档与证据**
@@ -76,6 +79,10 @@
 3. **`board.getCard()` 返回 `{card, records}`**；卡标题字段是 `title`（`label` 只是 deck 展示字段）。
 4. **`op=accept` 要 `verdict` + 经验（或 `experienceNone:true`）**；`validateReport` 返回包装。
 5. **客户端测试的假 ctx**：`slots.inject(name, fn)` 必须真的执行 `fn`，否则座位注册不上。
+6. **工具定义有宿主契约，假 ctx 测不到**（真机踩了 5 次，详见 `PROGRESS.md` §3.5）：
+   - `output.render(args, value)` 必须返回 `ContentBlock[]`，**不是字符串**；签名是**两个参数**，少写一个会渲染到参数而不是结果。
+   - 输出 value 会被宿主按 `output.schema` 严格校验，**副作用先发生、校验后失败**；可空字段必须用 `oneOf:[{type:'object'},{type:'null'}]`（宿主不支持 `type:[...]`）。
+   - 实现会读的每个入参都必须写进 `parameters.properties`，否则真模型传了也会被丢掉。
 
 ## 6. 怎么跑
 
@@ -88,6 +95,6 @@
 
 ## 7. 下一个动作
 
-1. **真机重启 DSH**（会结束当前会话，必须由用户操作）→ 按 `docs/e2e-checklist.md` 勾完，重点：审批卡片真的弹、拒绝后零副作用、六状态目视可辨、`changes` 流可用、经验能检索。
+1. **重启 DSH**（会结束当前会话，必须由用户操作；新代码只在重启后生效）→ 在桌面应用里从固定 Master 会话派一路，勾 `docs/e2e-checklist.md` **GUI 三条**：审批卡片真的弹且批准能 spawn / 拒绝零副作用、`changes` 流或 2s 轮询能自动刷新、六状态目视可辨。
 2. 任何一条 ❌：先看 PROGRESS §5 的两条修复记录 —— 大概率是宿主 API 行为与 asar 证据不符，**回去读 `.scratch/api-notes.md` 再改**。
 3. 可选后续（未开工，也没有票）：`chooseDispatch` 从「提示词纪律」升级成硬闸门；客户端改成构建产物（现在是手写经典脚本）。

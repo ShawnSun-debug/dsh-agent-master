@@ -7,7 +7,7 @@
 ## 1. 现在在哪
 
 - **T09–T13 五票全部落地**（看板为核心的重定向）：看板数据层、旧看板迁移、门禁与派发审批、经验沉淀、指挥台 deck v2。
-- 测试：18 个文件 / **267 例全绿**。入口 `node scripts/test.mjs`（本机 `%TEMP%` 对沙箱进程不可写，脚本把 TEMP 指到仓内 `.test-tmp`；`node --test` 在 confined 模式下会因管道 spawn 报 EPERM，故改成逐文件 `node <file>`）。
+- 测试：19 个文件 / **272 例全绿**。入口 `node scripts/test.mjs`（本机 `%TEMP%` 对沙箱进程不可写，脚本把 TEMP 指到仓内 `.test-tmp`；`node --test` 在 confined 模式下会因管道 spawn 报 EPERM，故改成逐文件 `node <file>`）。
 - 源码：`lib/{config,board,migrate,ledger,handoff,gate,approval,experience,tools,sections,deck,sources,dispatch,master,index}.js` + `client/client.js`。
 - 契约：`docs/GLOSSARY.md`（术语）、`docs/adr/0001–0004`（不可逆决策）、`.scratch/api-notes.md`（宿主 API 行号证据）、`issues/00-wayfinder-map.md`（地图）。
 - 落盘：`<dataDir>/<rootId>/{board.json,ledger.jsonl,artifacts/}`；指挥台 `<root cwd>/.agent-master/<rootId>/deck.json`；经验 `<root cwd>/.agent-master/experience.jsonl` + `~/.dsh/agent-master/experience.jsonl`。
@@ -37,14 +37,50 @@
 | T13 | 指挥台 deck v2：六状态/认领者/P 级、v1 占位、轮询兜底、不写会话事件 | `lib/deck.js`、`client/client.js`、`test/deck`（12）、`test/client`（17） | `776e582` |
 | 接线 | 七工具注册、迁移前置、审批门禁、经验库注入、deck 落盘 | `lib/index.js`、`test/wiring`（17）、`test/integration`（1）、`test/plugin`（15） | `21fe0ac` |
 
+## 3.5 真机验证记录（2026-11-18，headless 真宿主 + 真模型）
+
+用一个临时 profile（`@deepseek-ai/dsh-base` + `dsh-headless` + 本插件，`node_modules` junction 指回 desktop）
+把插件装进**真宿主**跑真模型，让模型真的去调工具。这一步抓到了 5 个离线测试看不见的 bug——共同根因：
+**假 ctx 测试同时绕过了宿主的入参校验和输出校验**。
+
+| # | 现象（真机原文） | 根因 | 修复 / 防回归 |
+|---|---|---|---|
+| 1 | `Error: content.some is not a function` | `output.render` 返回字符串；宿主契约是 `ContentBlock[]`（`dsh-tools/src/contracts.ts`） | 七个 render 改 `textBlock()`；`test/tools.test.mjs` 断言每个 render 返回非空 text 块 |
+| 2 | `op=head` 只回「看板操作完成」 | 宿主签名是 `render(args, value)`，我们写成单参数，渲染到的是**参数**不是结果 | 七个签名改 `(args, value)`；测试断言 `render.length === 2` 且 head 文案带真实数字 |
+| 3 | 建卡报 `value.card.assignee must be an object`（卡其实已建好） | 输出 schema 把 `assignee/childSessionId/tools/locator` 的 `null` 声明成非空；宿主 schema 子集不支持 `type: [..]`，要用 `oneOf` | 加 `NULLABLE_*` 片段；新增 `test/schema.test.mjs` 按宿主规则校验真实返回值 |
+| 4 | `assign` 报 `value.tools: must be array` | 未指定白名单时 `childAllowList` 返回 `null` | `NULLABLE_STRING_ARRAY`；同由 `schema.test.mjs` 覆盖 |
+| 5 | `op=accept` 永远报「必须带 experience」 | 工具**入参 schema** 没声明 `verdict/experience/experienceNone`，真模型传了也被丢掉（假 ctx 直接注入 args 才没暴露） | 补三个参数；`schema.test.mjs` 逐工具断言「实现会读的键都在 parameters 里」 |
+
+**真机已跑通的完整链路**（每次都是真宿主 + 真模型，产物在盘上）：
+
+- `master_board op=head/query/records` → 正常返回（此前必崩）。
+- `op=create` → `卡 t1（todo，rev 1）`；`~/.dsh/agent-master/<rootId>/board.json` 落盘。
+- `op=claim` → `assigned`；`op=doing` → `doing`；`master_report final:true` → 卡进 `review`（手工建卡会带 1 处台账违规，属设计内）。
+- `op=accept verdict=accept + experience` → `卡 t1（done，rev 5）`，卡置 done，经验写进 `<cwd>/.agent-master/experience.jsonl`（`sourceCardId: t1`）。
+- `master_assign` → **fail-closed 生效**：`Error: 审批通道不可用（outcome=unavailable）`，看板零新增卡、零 spawn。
+- 指挥台数据源：`.agent-master/<rootId>/deck.json` 为 v2 快照，含真实卡（`label/status/rev/assignee/counts`）。
+
+**怎么复现这套真机验证**（约 10 分钟，不需要 GUI）：
+
+1. 建临时 profile：`%USERPROFILE%\.dsh\profiles\probe-amb\`，`package.json` 的 `dsh.profile.bundles` =
+   `["@deepseek-ai/dsh-base", "@deepseek-ai/dsh-headless", "dsh-agent-master"]`，
+   `dependencies` 里 `"dsh-agent-master": "link:D:/Agent Workspace/dsh-agent-master"`；
+   再 `New-Item -ItemType Junction -Path <probe>\node_modules -Target <desktop profile>\node_modules`。
+2. 复制 desktop profile 的 `cordis.yml` 与 `cordis.patch.yml`（模型路由与开关都在 patch 里）。
+3. 跑：`$env:ELECTRON_RUN_AS_NODE="1"; & "D:\Deepseek Harness\DeepSeek Harness.exe" "<asar>\...\@deepseek-ai\dsh\lib\bin.js" --profile probe-amb "<让模型调某个工具的提示词>"`；
+   CLI 读不到凭据时，把 `~/.dsh/.credentials.yaml` 里 `refs` 的两把 key 作为环境变量传给子进程即可。
+4. 产物看 `~/.dsh/agent-master/<rootId>/` 与 `<cwd>/.agent-master/`。
+
 ## 4. 未验证（真机，必须人工勾）
 
-以下四条**离线无法证明**，重启 DSH 后按 `docs/e2e-checklist.md` 勾：
+服务端（工具层）已在真宿主里跑通（见 §3.5）。**只剩 GUI 侧三条**，需要重启 DSH 后在桌面应用里勾：
 
-1. 派发时**真的弹出人批准卡片**（标题/理由可读），拒绝后不建卡不 spawn；放置满 `approvalWaitMs` 后按拒绝返回。
+1. 派发时**真的弹出人批准卡片**（标题/理由可读），点「批准」能 spawn、点「拒绝」零副作用；放置满 `approvalWaitMs` 按拒绝返回。
+   （headless 里已验到另一极端：无审批服务时 fail-closed，见 §3.5。）
 2. `workspaceFiles.changes` 文件级 watch 可用（卡片不刷新自动变色）；不可用时 2s 轮询仍能变。
 3. 指挥台六种状态/认领者/P 级的**目视**可区分度（无 DOM 测试，只有纯函数与渲染树断言）。
-4. 验收写入的经验能在 `master_experience op=query` 检索到，且两级别（项目/全局）合并顺序正确。
+
+另：`master_experience op=query` 的两级合并（项目优先、全局兜底）离线与真机写入都验过，检索边界仍有测试覆盖，不再单列。
 
 ## 5. 修复记录（保留，防复发）
 

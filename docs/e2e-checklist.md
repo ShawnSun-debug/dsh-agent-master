@@ -10,6 +10,20 @@
 - [x] profile `dsh.profile.bundles` 含 `dsh-agent-master`
 - [x] `node_modules/dsh-agent-master` 解析到本仓库真实路径
 
+## 0.5 服务端已在真宿主验证（2026-11-18，headless + 真模型）
+
+用一个临时 profile（`@deepseek-ai/dsh-base` + `@deepseek-ai/dsh-headless` + 本插件）把插件装进**真宿主**、
+让真模型真的去调工具，结果是**服务端全链路通过**（详见 `PROGRESS.md` §3.5）：
+
+- [x] 七个工具真的注册进宿主，模型能调用（此前必崩，见 §3.5 的 5 个真机 bug）
+- [x] `master_board`：`head` / `query` / `records` / `create` / `claim` / `doing` / `accept` 全部正常返回
+- [x] `master_report final:true` → 卡进 `review`；`op=accept verdict=accept + experience` → 卡 `done` 且经验落盘
+- [x] `master_assign` 在**没有审批服务**的宿主里 fail-closed：报「审批通道不可用」、零建卡零 spawn
+- [x] 落盘证据：`~/.dsh/agent-master/<rootId>/board.json`、`<cwd>/.agent-master/<rootId>/deck.json`（v2）、
+      `<cwd>/.agent-master/experience.jsonl`
+
+**仍未验证的只有下面 GUI 侧三条**（要人看着屏幕）：审批卡片弹出并被点批准、`changes` 流/轮询自动刷新、六状态目视可辨。
+
 ## 1. 冒烟（5 分钟）
 
 - [ ] DSH 启动**无报错弹窗**；插件页能看到 `dsh-agent-master`
