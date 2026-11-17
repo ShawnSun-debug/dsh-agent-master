@@ -77,6 +77,38 @@ function validate(schema, value, path = 'value') {
   return violations
 }
 
+/** 实现（或宿主校验）会用到的入参数键，必须都在 parameters schema 里声明。 */
+const DECLARED_ARGS = {
+  master_assign: ['label', 'name', 'taskId', 'priority', 'tools', 'brief'],
+  master_dispatch: ['briefs'],
+  master_report: ['taskId', 'summary', 'findings', 'evidence', 'open_questions', 'artifacts', 'confidence', 'schemaVersion', 'final'],
+  master_collect: ['names', 'waitMs'],
+  master_board: [
+    'op', 'cardId', 'rev', 'reason', 'asMaster', 'status', 'assignee', 'priority',
+    'kind', 'tag', 'sinceSeq', 'limit', 'title', 'body', 'verdict', 'experience', 'experienceNone',
+  ],
+  master_digest: ['text', 'path', 'budgetBytes'],
+  master_experience: ['op', 'title', 'lesson', 'root_cause', 'fix', 'tags', 'scope', 'sourceCardId', 'tag', 'q', 'limit', 'offset'],
+}
+
+test('入参 schema 声明了实现会读的每个键（真机曾把 verdict/experience 丢掉）', async () => {
+  const { tools } = await makeEnv()
+  for (const definition of tools.definitions) {
+    const expected = DECLARED_ARGS[definition.name]
+    assert.ok(expected, '测试漏了 ' + definition.name + ' 的入参清单')
+    const properties = definition.parameters.properties ?? {}
+    for (const key of expected) {
+      assert.ok(properties[key], definition.name + ' 的 parameters 缺少 ' + key + '（宿主/模型层会把未声明的参数丢掉）')
+    }
+    // op=accept 的契约：verdict 三选一 + experience/experienceNone
+    if (definition.name === 'master_board') {
+      assert.deepEqual(properties.verdict.enum, ['accept', 'rework', 'abort'])
+      assert.deepEqual(properties.experience.required, ['title', 'lesson'])
+      assert.equal(properties.experienceNone.type, 'boolean')
+    }
+  }
+})
+
 async function makeEnv() {
   const dir = await mkdtemp(join(tmpdir(), 'schema-'))
   const board = new Board({ dir, maxCards: 32, maxRecords: 256 })
