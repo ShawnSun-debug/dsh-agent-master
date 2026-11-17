@@ -498,3 +498,49 @@ test('T11 master_board op=block 写原因，op=reopen 只由 master 解除', asy
   assert.equal(reopened.card.status, 'todo')
   assert.equal((await board.getCard('t1')).card.assignee.sessionId, 'session-a')
 })
+
+/**
+ * 真机事故回归：宿主（dsh-tools/src/contracts.ts）规定
+ * `ToolOutputDefinition.render(args, value): ContentBlock[]`。
+ * 我们曾返回字符串，真宿主把它当 content 数组用，直接崩
+ * `content.some is not a function` —— 假 ctx 测试全绿也照样炸。
+ */
+test('每个工具的 output.render 都返回内容块数组（宿主契约）', async () => {
+  const { tools } = await makeEnv()
+  assert.equal(tools.definitions.length, 7)
+
+  const samples = new Map([
+    ['master_assign', { taskId: 't1', cardId: 't1', status: 'todo', priority: 'P2', promptBytes: 120 }],
+    ['master_dispatch', { ok: true, routes: [{ taskId: 't1', priority: 'P2' }] }],
+    ['master_report', { cardId: 't1', recordIds: ['r1'], violations: [], ok: true, final: true }],
+    ['master_collect', { children: [{ cardId: 't1', status: 'review' }], missing: [] }],
+    ['master_board', { head: { cards: 1, records: 2, revision: 3 } }],
+    ['master_digest', { locator: null, sha256: 'x', bytes: 10, summary: 's', truncated: false }],
+    ['master_experience', { action: 'created', entry: { title: '经验' } }],
+  ])
+
+  for (const definition of tools.definitions) {
+    const sample = samples.get(definition.name)
+    assert.ok(sample, '测试漏了 ' + definition.name + ' 的样例值')
+    // 宿主签名是 render(args, value)：写成单参数会把参数当结果渲染（真机踩过）
+    assert.equal(definition.output.render.length, 2, definition.name + '.render 必须是 (args, value)')
+
+    for (const args of [{}, { op: 'head' }]) {
+      const content = definition.output.render(args, sample)
+      assert.ok(Array.isArray(content), definition.name + '.render 必须返回数组')
+      assert.ok(content.length > 0, definition.name + '.render 不能返回空数组')
+      for (const block of content) {
+        assert.equal(block.type, 'text', definition.name + '.render 的块必须是 text')
+        assert.equal(typeof block.text, 'string', definition.name + '.render 的 text 必须是字符串')
+      }
+    }
+  }
+
+  // 渲染的必须是 value（结果），不是 args（参数）：op=head 要报出真实卡数/记录数
+  const boardDefinition = tools.definitions.find((d) => d.name === 'master_board')
+  const rendered = boardDefinition.output.render(
+    { op: 'head' },
+    { head: { version: 1, revision: 7, headSeq: 9, cards: 2, records: 5 } },
+  )
+  assert.equal(rendered[0].text, '看板头：卡 2 张、记录 5 条、revision 7、退役卡 0 张')
+})
