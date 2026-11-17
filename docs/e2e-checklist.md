@@ -13,15 +13,15 @@
 ## 1. 冒烟（5 分钟）
 
 - [ ] DSH 启动**无报错弹窗**；插件页能看到 `dsh-agent-master`
-- [ ] 新开会话，问模型「你现在有哪些 master_ 开头的工具」→ 应列出 5 个：
-      `master_assign` / `master_report` / `master_collect` / `master_board` / `master_digest`
+- [ ] 新开会话，问模型「你现在有哪些 master_ 开头的工具」→ 应列出 7 个：
+      `master_assign` / `master_dispatch` / `master_report` / `master_collect` / `master_board` / `master_digest` / `master_experience`
 - [ ] 右侧栏出现 **指挥台** 标签（空态文案：还没有下派任何子对话）
 - [ ] 让模型开一个子对话后，子对话里同样能看到 `master_report`（这条最容易失败：子 preset 可能不暴露本包工具）
 
 ## 1.5 Master 会话（T9 新增，重启后先看这一节）
 
 - [ ] 左栏会话列表**顶部**出现标题为 `Master` 的会话（置顶生效；不要求它已打开）
-- [ ] 打开它：工具列表只有 5 个 master 工具 + `read`/`write`/`edit`/`ask_user_question`，**没有 pwsh / bash / 终端**
+- [ ] 打开它：工具列表只有 7 个 master 工具 + `read`/`write`/`edit`/`ask_user_question`，**没有 pwsh / bash / 终端**
 - [ ] 问模型「你能执行终端命令吗」→ 应明确回答不能，而不是尝试调用不存在的工具
 - [ ] 再重启一次 DSH：仍是同一个 master 会话（不会每次启动都新建一条）
 - [ ] 让 master 带 `tools: ["read","write","pwsh"]` 调一次 `master_assign`：子对话里工具恰为这三个 + `master_report`/`master_board`
@@ -35,11 +35,13 @@
 > 每路用 web_search 找来源，结束后必须 master_report 回传（evidence 带 URL 和原文 quote）。
 > 全部回报后用 master_collect 汇总成一份带引用的结论，并指出哪些来源互为冲突。
 
+- [ ] **先弹一次人批准卡片**（标题/理由里能看到「要开几路、分别做什么」）；批准后三路才真正开跑
 - [ ] 三路子对话并行跑起来，指挥台上出现 3 张卡片
-- [ ] 卡片状态从 `assigned`（灰）变 `reported`（绿）
+- [ ] 卡片状态走完整条链：`assigned`（蓝）→ `doing`（紫）→ `review`（橙）→ 验收后 `done`（绿）
+- [ ] 卡片上能看到认领者名字与 P 级（P0–P3）
 - [ ] 点卡片能打开对应子对话 tab 并插话
 - [ ] 汇总里有引用；同一 URL 的多段引文被标为**冲突待核**而不是被悄悄合并
-- [ ] 黑板目录出现：`<DSH_HOME>/agent-master/<rootSessionId>/{board.jsonl,ledger.jsonl}`
+- [ ] 看板目录出现：`<DSH_HOME>/agent-master/<rootSessionId>/{board.json,ledger.jsonl}`（`board.json` 里是 `cards` + `records`）
 
 ## 3. 场景 B：并行改码
 
@@ -49,20 +51,35 @@
 - [ ] `master_collect` 能列出两路各自触碰的 artifact 路径
 - [ ] 若某一路越界（改了台账 `boundaries` 之外的路径），collect 里能看到 `boundary` 违规
 
+## 3.5 场景 D：审批、批量派发与验收沉淀（T11/T12 新增）
+
+- [ ] 让 master 用 `master_dispatch` 一次派 3 路 → **只弹一次**审批卡片，不是三次
+- [ ] **拒绝**那次审批 → 模型被告知被拒、看板上**一张卡都没多**、没有子会话被创建
+- [ ] 骗一次：让 master 用 `master_assign` 派活时不填 constraints/acceptance → 应被工具当场拒绝（预检在任何写入之前）
+- [ ] 子对话在第一份报告里写 `final:true` → 卡进 `review`；master 用 `master_board op=accept verdict=accept` 验收 → 卡进 `done`
+- [ ] 验收时**不带** `experience` 也不带 `experienceNone` → 工具应报错拒绝（不允许静默跳过沉淀）
+- [ ] 带 `experience` 验收 → `<cwd>/.agent-master/experience.jsonl` 出现该条；再让它 `master_experience op=query` 能搜到
+- [ ] 子对话自己调 `op=accept` → 应被明确拒绝（只有 master 能验收）
+- [ ] 让某个子对话 `op=block` 报阻塞 → 卡片变 `blocked`（红）；master `op=reopen` 后回到 `todo`
+
 ## 4. 场景 C：冷恢复接力
 
 - [ ] 关掉 DSH，重开，回到同一个 root 会话
-- [ ] 指挥台仍显示之前的子对话卡片（黑板持久化生效）
+- [ ] 指挥台仍显示之前的卡片与状态（`deck.json` 快照持久化生效）
 - [ ] 对某个子对话 `send_message` 继续追问，能收到回复（冷恢复生效）
 - [ ] 该子对话再 `master_report` 一次，master 侧 `collect` 能看到新记录
 
-## 5. 三条兼容性探针（真宿主才知道）
+## 5. 兼容性探针（真宿主才知道）
 
-这三条是代码里唯一无法离线证实的假设，专门验：
+这几条是代码里唯一无法离线证实的假设，专门验：
 
 - [ ] **`ctx.tools.register` 接受普通对象定义**（不是只能接 `defineTool` 的结果）—— 冒烟里 5 个工具能出现即证明
-- [ ] **`session.append` 接受第三方自定义事件 `agent-master/deck`** —— 指挥台卡片状态能实时变色即证明
-- [ ] **投影能推到浏览器**（`useProjection('agentMaster')` 拿得到 state）—— 面板不是一直空态即证明
+- [ ] **指挥台快照能落盘且客户端能读**：`<cwd>/.agent-master/<rootId>/deck.json` 存在且可解析；面板/会话头胶囊显示数据即证明客户端 `workspaceFiles.read` 通路成立
+- [ ] **`workspaceFiles.changes` 文件级 watch 可用**：一次 `master_assign` 后卡片状态自动变化（不刷新）即证明；不行会退到 2s 轮询（也能变色，靠时序/心跳区分）
+- [ ] **老会话回退投影**：升级前写过 deck 事件的会话（如 d1fec061）没有快照文件，面板仍显示旧数据即证明 `useProjection('agentMaster')` 回退可用
+- [ ] **v1 快照占位**：把某个 `deck.json` 手工改成 `{"headSeq":1,"children":[]}` → 面板显示「旧契约」占位提示，**不白屏、不抛错**
+- [ ] **审批服务存在**：派发时真的弹出人批准（不是静默放行）。若宿主没有 `approval` 服务，应看到工具被拒并提示原因（fail-closed），而不是悄悄执行
+- [ ] **审批超时**：批准卡片放着不点满 10 分钟 → 工具返回「审批超时/被拒」，不创建任何子会话
 
 ## 6. 失败处置
 
@@ -70,7 +87,7 @@
 |---|---|
 | 启动报错 / 插件未加载 | `%USERPROFILE%\.dsh\profiles\desktop\cordis.yml` 是否含 `agent-master`；宿主日志里的 cordis 装载错误 |
 | 工具没出现 | 会话 preset 是否禁用了该包的工具；子对话场景还要看子 preset |
-| 指挥台空态不更新 | 自定义事件是否被拒（看宿主日志有无 `session.append` 相关错误）；投影 key 是否注册成功 |
+| 指挥台空态不更新 | `<cwd>/.agent-master/<rootId>/deck.json` 是否存在/可解析；浏览器控制台有无 `workspaceFiles` 读失败；宿主日志有无 `deckErrors`；老会话再查投影 key 是否注册成功 |
 | 点卡片打不开 | 子会话是否已挂载在屏幕上（`openResource` 对未挂载会话会抛，已被 catch 成 false） |
 
 **回滚**：从 profile `package.json` 的 `dsh.profile.bundles` 删掉 `dsh-agent-master`（依赖可留），重启即停用；

@@ -1,3 +1,13 @@
+/**
+ * dsh-agent-master — 约束台账（ledger）单测。
+ *
+ * 覆盖：append-only 物理形态、同内容重试幂等、version CAS、前缀完整性
+ * （删文件/改行/坏行）、list/latest、并发串行化、verify 三类离线校验。
+ *
+ * 约定：临时目录一律落在 os.tmpdir()（运行前把 TEMP/TMP 指到仓内 .test-tmp），
+ * 不碰真实 ~/.dsh。
+ */
+
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
@@ -11,7 +21,7 @@ function sha256(text) {
   return createHash('sha256').update(text, 'utf8').digest('hex')
 }
 
-/** 每个用例一个 os.tmpdir() 下的临时目录，用完删掉，不碰真实 ~/.dsh。 */
+/** 每个用例一个 os.tmpdir() 下的临时目录，用完删掉。 */
 async function tempDir(t) {
   const dir = await mkdtemp(join(tmpdir(), 'dsh-am-ledger-'))
   t.after(() => rm(dir, { recursive: true, force: true }))
@@ -33,7 +43,7 @@ function ledgerError(pattern) {
   }
 }
 
-test('台账首版 version=1，内容变化后 version 自增且旧版本留在盘上', async (t) => {
+test('ledger：首版 version=1，内容变化后 version 自增且旧版本留在盘上', async (t) => {
   const dir = await tempDir(t)
   const ledger = new Ledger({ dir, now: () => 1700000000000 })
 
@@ -65,15 +75,15 @@ test('台账首版 version=1，内容变化后 version 自增且旧版本留在�
 
   const second = await ledger.append({ taskId: 't-1', constraints: ['只用官方文档'], acceptance: ['给出链接与原文'] })
   assert.equal(second.version, 2)
+  assert.deepEqual(await ledger.latest('t-1'), second)
 
   const lines = await ledgerLines(dir)
-  assert.equal(lines.length, 2)
+  assert.equal(lines.length, 2, '旧版本必须留在盘上，不能被新版本替换')
   assert.equal(JSON.parse(lines[0]).version, 1)
   assert.equal(JSON.parse(lines[1]).version, 2)
-  assert.deepEqual(await ledger.latest('t-1'), second)
 })
 
-test('同 taskId 同内容不追加新版本（顺序无关），返回既有 entry', async (t) => {
+test('ledger：同 taskId 同内容重试不新增版本（顺序无关），返回既有 entry', async (t) => {
   const dir = await tempDir(t)
   const ledger = new Ledger({ dir })
 
@@ -81,12 +91,18 @@ test('同 taskId 同内容不追加新版本（顺序无关），返回既有 en
   const again = await ledger.append({ taskId: 't-1', boundaries: ['artifacts'], constraints: ['乙', '甲'] })
 
   assert.deepEqual(again, first)
-  assert.equal(again.version, 1)
+  assert.equal(again.version, 1, '内容未变时版本号不能前进')
   assert.equal((await ledgerLines(dir)).length, 1)
-  assert.equal(await ledger.latest('t-2'), null)
+  assert.deepEqual(await ledger.latest('t-1'), first)
+  assert.deepEqual(await ledger.list(), [first])
+  assert.equal(await ledger.latest('不存在的 taskId'), null)
+
+  // 返回值是快照：外部改它不能污染内存索引
+  again.constraints.push({ text: '外部改动', needsEvidence: false })
+  assert.deepEqual(await ledger.latest('t-1'), first)
 })
 
-test('hash 是四组数组稳定排序后的 sha256', async (t) => {
+test('ledger：hash 是四组数组稳定排序后的 sha256', async (t) => {
   const dir = await tempDir(t)
   const ledger = new Ledger({ dir })
 
@@ -112,7 +128,7 @@ test('hash 是四组数组稳定排序后的 sha256', async (t) => {
   assert.equal(entry.hash, expected)
 })
 
-test('用旧 version 覆盖既有版本（如 digest 摘要回写）抛 LedgerError 且盘上不变', async (t) => {
+test('ledger：用旧 version 覆盖既有版本（如 digest 摘要回写）抛 LedgerError 且盘上不变', async (t) => {
   const dir = await tempDir(t)
   const ledger = new Ledger({ dir })
   await ledger.append({ taskId: 't-1', constraints: ['原约束'] })
@@ -124,24 +140,37 @@ test('用旧 version 覆盖既有版本（如 digest 摘要回写）抛 LedgerEr
   )
 
   const lines = await ledgerLines(dir)
-  assert.equal(lines.length, 2)
+  assert.equal(lines.length, 2, '被拒的写入不能留下任何一行')
   assert.deepEqual((await ledger.latest('t-1')).constraints, [{ text: '新约束', needsEvidence: false }])
+
+  // version 是乐观并发校验：0、字符串、跳号都不是"下一个版本号"
+  for (const version of [0, '3', 4]) {
+    await assert.rejects(
+      () => ledger.append({ taskId: 't-1', constraints: ['第三版'], version }),
+      ledgerError(/version 冲突/),
+      'version=' + JSON.stringify(version) + ' 必须被拒',
+    )
+  }
 
   // 带正确的下一个 version 仍可追加
   const third = await ledger.append({ taskId: 't-1', constraints: ['第三版'], version: 3 })
   assert.equal(third.version, 3)
+  assert.equal((await ledgerLines(dir)).length, 3)
 })
 
-test('台账文件被删除后追加抛 LedgerError，而不是静默重建', async (t) => {
+test('ledger：台账文件被删除后追加抛 LedgerError，而不是静默重建', async (t) => {
   const dir = await tempDir(t)
   const ledger = new Ledger({ dir })
   await ledger.append({ taskId: 't-1', constraints: ['不可被摘要覆盖'] })
   await rm(join(dir, 'ledger.jsonl'))
 
-  await assert.rejects(() => ledger.append({ taskId: 't-2', constraints: ['另一条'] }), ledgerError(/截断/))
+  await assert.rejects(
+    () => ledger.append({ taskId: 't-2', constraints: ['另一条'] }),
+    ledgerError(/截断/),
+  )
 })
 
-test('既有版本的行被改写后追加抛 LedgerError', async (t) => {
+test('ledger：既有版本的行被改写后追加抛 LedgerError', async (t) => {
   const dir = await tempDir(t)
   const ledger = new Ledger({ dir })
   await ledger.append({ taskId: 't-1', constraints: ['原约束'] })
@@ -153,18 +182,25 @@ test('既有版本的行被改写后追加抛 LedgerError', async (t) => {
   await assert.rejects(() => ledger.append({ taskId: 't-1', constraints: ['新约束'] }), ledgerError(/已被改写/))
 })
 
-test('台账文件出现非法 JSON 行时读取抛 LedgerError', async (t) => {
+test('ledger：坏行——非法 JSON 行让 list/latest 抛 LedgerError（不跳过）', async (t) => {
   const dir = await tempDir(t)
   const first = new Ledger({ dir })
   await first.append({ taskId: 't-1', constraints: ['甲'] })
   await appendFile(join(dir, 'ledger.jsonl'), '{这不是 JSON\n', 'utf8')
 
   const broken = new Ledger({ dir })
-  await assert.rejects(() => broken.list(), ledgerError(/第 2 行/))
-  await assert.rejects(() => broken.latest('t-1'), LedgerError)
+  await assert.rejects(() => broken.list(), ledgerError(/第 2 行不是合法 JSON/))
+  await assert.rejects(() => broken.latest('t-1'), ledgerError(/已损坏/))
+
+  // 缺 taskId/version/hash 的行同样算损坏
+  const dir2 = await tempDir(t)
+  const second = new Ledger({ dir: dir2 })
+  await second.append({ taskId: 't-1', constraints: ['甲'] })
+  await appendFile(join(dir2, 'ledger.jsonl'), JSON.stringify({ version: 2, hash: 'x' }) + '\n', 'utf8')
+  await assert.rejects(() => new Ledger({ dir: dir2 }).list(), ledgerError(/缺少 taskId\/version\/hash/))
 })
 
-test('多个 Ledger 实例顺序追加时版本继续递增，不误判为篡改', async (t) => {
+test('ledger：多实例顺序追加时版本继续递增，不误判为篡改', async (t) => {
   const dir = await tempDir(t)
   const a = new Ledger({ dir })
   const b = new Ledger({ dir })
@@ -173,11 +209,11 @@ test('多个 Ledger 实例顺序追加时版本继续递增，不误判为篡改
   await b.append({ taskId: 't-1', constraints: ['第二版'] })
   const third = await a.append({ taskId: 't-1', constraints: ['第三版'] })
 
-  assert.equal(third.version, 3)
+  assert.equal(third.version, 3, '磁盘变长是另一实例的追加，应并入索引而不是报篡改')
   assert.equal((await ledgerLines(dir)).length, 3)
 })
 
-test('list 按 taskId 分组只返回最新版本', async (t) => {
+test('ledger：list 按 taskId 分组只返回最新版本', async (t) => {
   const dir = await tempDir(t)
   const ledger = new Ledger({ dir })
 
@@ -195,7 +231,7 @@ test('list 按 taskId 分组只返回最新版本', async (t) => {
   )
 })
 
-test('并发追加同一 taskId：版本连续、一条不少', async (t) => {
+test('ledger：并发追加同一 taskId 时版本连续、一条不少', async (t) => {
   const dir = await tempDir(t)
   const ledger = new Ledger({ dir })
 
@@ -204,19 +240,30 @@ test('并发追加同一 taskId：版本连续、一条不少', async (t) => {
   )
 
   assert.deepEqual(entries.map((entry) => entry.version), [1, 2, 3, 4, 5])
-  assert.equal((await ledgerLines(dir)).length, 5)
+  const lines = await ledgerLines(dir)
+  assert.equal(lines.length, 5)
+  // 落盘顺序与版本号一致，后续实例冷加载也得到同样索引
+  assert.deepEqual(lines.map((line) => JSON.parse(line).version), [1, 2, 3, 4, 5])
+  assert.equal((await new Ledger({ dir }).list()).length, 1)
 })
 
-test('非法输入抛 LedgerError', async (t) => {
+test('ledger：非法输入抛 LedgerError 并指出具体字段', async (t) => {
   const dir = await tempDir(t)
   const ledger = new Ledger({ dir })
 
-  await assert.rejects(() => ledger.append({ taskId: '', constraints: [] }), ledgerError(/taskId/))
+  await assert.rejects(() => ledger.append({ taskId: '', constraints: [] }), ledgerError(/非空 taskId/))
+  await assert.rejects(() => ledger.append({ taskId: 123 }), ledgerError(/非空 taskId/))
+  await assert.rejects(() => ledger.append({ taskId: 't-1', constraints: '不是数组' }), ledgerError(/constraints 必须是数组/))
+  await assert.rejects(() => ledger.append({ taskId: 't-1', constraints: [''] }), ledgerError(/constraints\[0\] 不能为空字符串/))
   await assert.rejects(() => ledger.append({ taskId: 't-1', acceptance: [1] }), ledgerError(/acceptance\[0\]/))
+  await assert.rejects(() => ledger.append({ taskId: 't-1', boundaries: [''] }), ledgerError(/boundaries\[0\]/))
   await assert.rejects(() => ledger.append({ taskId: 't-1', constraints: [{ text: '' }] }), ledgerError(/constraints\[0\]/))
+
+  // 参数错误在入队前抛出：坏写入不占用队列，也不落盘
+  await assert.rejects(() => readFile(join(dir, 'ledger.jsonl'), 'utf8'), /ENOENT/)
 })
 
-test('verify：forbidden 命中摘要或发现 → violation(kind=forbidden)', async (t) => {
+test('ledger：verify——forbidden 命中摘要或发现 → violation(kind=forbidden)', async (t) => {
   const dir = await tempDir(t)
   const ledger = new Ledger({ dir })
   const entry = await ledger.append({ taskId: 't-1', forbidden: ['内部机密'] })
@@ -233,7 +280,7 @@ test('verify：forbidden 命中摘要或发现 → violation(kind=forbidden)', a
   assert.match(findingHit.violations[0].reason, /发现 #2/)
 })
 
-test('verify：产物路径越界 → violation(kind=boundary)，边界为空则不检查', async (t) => {
+test('ledger：verify——产物路径越界 → violation(kind=boundary)，边界为空则不检查', async (t) => {
   const dir = await tempDir(t)
   const ledger = new Ledger({ dir })
   const entry = await ledger.append({ taskId: 't-1', boundaries: ['artifacts'] })
@@ -272,7 +319,7 @@ test('verify：产物路径越界 → violation(kind=boundary)，边界为空则
   )
 })
 
-test('verify：needsEvidence 约束缺少 evidence → violation(kind=constraint)', async (t) => {
+test('ledger：verify——needsEvidence 约束缺少 evidence → violation(kind=constraint)', async (t) => {
   const dir = await tempDir(t)
   const ledger = new Ledger({ dir })
   const entry = await ledger.append({
@@ -293,7 +340,7 @@ test('verify：needsEvidence 约束缺少 evidence → violation(kind=constraint
   assert.deepEqual(present, { violations: [], ok: true })
 })
 
-test('verify 兼容未归一化的字符串约束；全部通过时无 violation', async (t) => {
+test('ledger：verify——兼容未归一化字符串约束，全部通过时无 violation', async (t) => {
   const dir = await tempDir(t)
   const ledger = new Ledger({ dir })
 

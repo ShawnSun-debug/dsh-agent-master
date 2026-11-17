@@ -1,0 +1,93 @@
+# HANDOFF — dsh-agent-master
+
+> 一条 master 对话指挥 N 路子对话；共享看板（\`board.json\`）是唯一事实来源。
+> **T09–T13 五票已全部落地，266 例测试全绿。剩下的是真机验收，不是写码。**
+
+## 0. 60 秒上手（按顺序读）
+
+1. \`PROGRESS.md\` §1「现在在哪」+ §2「决策偏差」+ §6「雷区」——只读这三节也够开工。
+2. \`docs/GLOSSARY.md\`——卡（card）/ 记录（record）/ 看板（board）/ 证据流 / 认领 / 验收，术语别自造。
+3. \`docs/adr/0001–0004\`——不可逆决策（看板为核、卡与记录分离、审批门禁、deck v2）。**要改先写新 ADR**。
+4. 动宿主 API 之前读 \`.scratch/api-notes.md\`——里面是 asar 源码行号证据（\`ctx.waterfall\`、\`approval.request\`、\`workspaceFiles\`、\`tools.restrict\`）。**别猜 API**。
+5. \`issues/00-wayfinder-map.md\`——地图；五张票全关，只剩 \`docs/e2e-checklist.md\` 的人工勾选。
+
+## 1. 状态
+
+| 项 | 值 |
+|---|---|
+| 票 | T09 / T10 / T11 / T12 / T13 **全部完成** |
+| 测试 | 18 个文件 / 266 例，全绿（\`node scripts/test.mjs\`） |
+| 未验证 | 4 条真机项，见 \`PROGRESS.md\` §4 与 \`docs/e2e-checklist.md\` |
+| 插件 | 已装进 desktop profile（\`link:\` 指向本仓库，改代码重启即生效） |
+
+## 2. 文件索引
+
+**核心（按依赖顺序读）**
+
+| 文件 | 职责 |
+|---|---|
+| \`lib/config.js\` | 配置默认值/校验（\`maxCards\` 32、\`approvalWaitMs\` 600000）、路径布局、\`sanitizeRootId\` |
+| \`lib/board.js\` | **看板**：\`board.json\` = cards + records；卡 rev CAS、状态机、原子 temp+rename、进程内串行队列 |
+| \`lib/migrate.js\` | 旧 \`board.jsonl\` → \`board.json\`：幂等、坏行计数、逐字节 \`.bak\`、原文件保留 |
+| \`lib/ledger.js\` | 约束台账（append-only，版本递增，改旧版报错） |
+| \`lib/handoff.js\` | 交接契约渲染（含开局四步）与回报校验 |
+| \`lib/gate.js\` | 回报门禁：没认领/不是自己的卡/blocked/done → 拒收并给可执行下一步 |
+| \`lib/approval.js\` | 派发审批：\`buildApprovalPlan\`、\`renderApprovalReason\`、\`requestApproval\`（自驱动超时）、\`createPreExecuteGate\` |
+| \`lib/experience.js\` | 经验库两级（项目优先/全局兜底），同 title 合并抬 \`verified_count\` |
+| \`lib/tools.js\` | 七个工具的实现 + \`definitions\`（含审批、批量派发、验收） |
+| \`lib/sections.js\` | 分角色提示词：master 段（看板优先/审批/验收）与 child 段（认领/最终回报/阻塞） |
+| \`lib/deck.js\` | **deck v2** 构建与 \`deckStateSchema\`（v1 → \`null\`，不抛错） |
+| \`lib/sources.js\` | 来源聚合去重与冲突标记（不替人裁决） |
+| \`lib/dispatch.js\` | 派发五档阶梯，**纯函数零 import**（\`tools.test.mjs\` 有断言） |
+| \`lib/master.js\` | master 会话引导：创建/置顶/标题/工具白名单/冷恢复重挂 |
+| \`lib/index.js\` | 宿主接线：七工具、迁移前置、审批门禁、投影、分角色 section、deck 落盘 |
+| \`client/client.js\` | 指挥台（经典脚本，\`__ModuleLoader__\`）：六状态/认领者/P 级/v1 占位/轮询兜底/点卡开子对话 |
+
+**测试（18 个文件，按票对号）**
+
+- T09 \`board.test.mjs\`(33)｜T10 \`migrate.test.mjs\`(13)｜T11 \`gate\`(7)/\`approval\`(15)/\`tools\`(24)｜T12 \`experience\`(14)｜T13 \`deck\`(12)/\`client\`(17)
+- 接线与回归：\`wiring\`(17)、\`plugin\`(15)、\`integration\`(1)、\`config\`(13)、\`master\`(15)、\`ledger\`(15)、\`sources\`(13)、\`dispatch\`(15)、\`handoff\`(19)、\`sections\`(8)
+
+**文档与证据**
+
+- \`PROGRESS.md\`（状态/偏差/雷区/修复记录）、\`docs/e2e-checklist.md\`（真机验收）、\`docs/GLOSSARY.md\`（术语）、\`docs/adr/\`（决策）
+- \`issues/00-wayfinder-map.md\` + \`issues/09..13-*.md\`（票面与验收逐条）
+- \`.scratch/api-notes.md\`（宿主 API 行号）、\`.scratch/plan.md\`、\`.scratch/interfaces.md\`
+
+## 3. 三条铁律
+
+1. **看板是唯一事实来源**：子对话开工第一件事是认领卡片（\`master_board op=claim\`），不是直接干活。
+2. **派发前必须拿到人批准**：\`master_assign\`/\`master_dispatch\` 走 \`tools/pre-execute\` 门禁；拿不到批准（拒绝/取消/服务缺失/超时）一律**不派**。
+3. **回收后由 master 验收并把教训写进经验库**：\`op=accept\` 不带经验也不带 \`experienceNone\` 会被当场拒绝。
+
+## 4. 已锁决策（不要重新讨论，除非写新 ADR）
+
+- 卡**可改**（rev 乐观锁），记录**只追加**（\`cardId\` 外键）；旧 \`board.jsonl\` 只读迁移。
+- 状态机六态，\`done\` 只有 master 能写；\`blocked\` 解除只能 master 做；\`assignee=master\` 可 \`todo→doing\` 直达。
+- 审批**自驱动**（\`ctx.get('approval').request\` + \`AbortSignal\` 计时），因为宿主 \`ApprovalRequest\` 没有超时字段；仍 fail-closed。
+- deck **v2 无 v1 适配层**：旧快照显示占位。
+- 客户端**只读工作区文件快照**，绝不写自定义会话事件（5.2 事故）。
+- 本项目**不再引用任何 \`memory_*\` 工具**。
+
+## 5. 雷区（最贵的五条）
+
+1. **不要用 \`%TEMP%\`**：沙箱进程 \`mkdtemp\` 报 EPERM，一律仓内 \`.test-tmp\`。
+2. **不要写自定义会话事件**：写入不校验、读档整份拒读，会让会话打不开。
+3. **\`board.getCard()\` 返回 \`{card, records}\`**；卡标题字段是 \`title\`（\`label\` 只是 deck 展示字段）。
+4. **\`op=accept\` 要 \`verdict\` + 经验（或 \`experienceNone:true\`）**；\`validateReport\` 返回包装。
+5. **客户端测试的假 ctx**：\`slots.inject(name, fn)\` 必须真的执行 \`fn\`，否则座位注册不上。
+
+## 6. 怎么跑
+
+    # 全量（Windows；node 不在 PATH）
+    $env:TEMP = "D:\Agent Workspace\dsh-agent-master\.test-tmp"; $env:TMP = $env:TEMP
+    & "C:\Users\charl\.dsh\dsh-runtimes\dsh-primary-runtime\dependencies\node\bin\node.exe" scripts/test.mjs
+
+    # 单个文件
+    & "<同一个 node>" test/board.test.mjs
+
+## 7. 下一个动作
+
+1. **真机重启 DSH**（会结束当前会话，必须由用户操作）→ 按 \`docs/e2e-checklist.md\` 勾完，重点：审批卡片真的弹、拒绝后零副作用、六状态目视可辨、\`changes\` 流可用、经验能检索。
+2. 任何一条 ❌：先看 PROGRESS §5 的两条修复记录 —— 大概率是宿主 API 行为与 asar 证据不符，**回去读 \`.scratch/api-notes.md\` 再改**。
+3. 可选后续（未开工，也没有票）：\`chooseDispatch\` 从「提示词纪律」升级成硬闸门；客户端改成构建产物（现在是手写经典脚本）。
