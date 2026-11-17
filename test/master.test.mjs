@@ -476,3 +476,24 @@ test('master：ensureMasterSession 工作区登记失败不阻断会话本身（
     assert.equal((await storeApi.read(await realpath(ws))).sessionId, result.sessionId)
   })
 })
+
+test('master：agents.create 永久挂起时按超时报错（真机表现为静默卡死）', async () => {
+  await withDirs('master', ['ws'], async (dirs) => {
+    const store = createMasterStore({ dir: join(dirs.ws, 'masters') })
+    const ctx = {
+      agents: { create: () => new Promise(() => {}) },
+      workspaceRegistry: { async create() { return {} }, async pinSession() {} },
+    }
+    const startedAt = Date.now()
+    await assert.rejects(
+      () => ensureMasterSession({ ctx, allow: ['read'], store, cwd: dirs.ws, createTimeoutMs: 40, retryTimes: 1 }),
+      (error) => {
+        assert.ok(error instanceof MasterError)
+        assert.match(error.message, /创建 master 会话超时（40ms 无返回）/)
+        return true
+      },
+    )
+    // 不能真的挂住：超时后必须很快返回
+    assert.ok(Date.now() - startedAt < 5000)
+  })
+})
