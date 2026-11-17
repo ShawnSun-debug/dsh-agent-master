@@ -13,8 +13,10 @@
  *   2) slots.inject('sidebar.right.pane.tab') 里按同一个 key 挂正文；
  *      标题挂 'sidebar.right.pane.tab.title' 的同一 key。
  *
- * 数据只有一个来源：宿主侧 sessionProjections 投影 key = 'agentMaster'
- * （api-notes §8.1）。本文件不 fold 状态、不缓存、不自行推导领域数据。
+ * 数据来源：宿主把 deck 快照写到会话工作区的 `.agent-master/<rootId>/deck.json`，
+ * 客户端用官方 workspaceFiles Remote（read + changes）按会话读取/监听；
+ * 老会话没有快照文件时回退到会话投影 key = 'agentMaster'（历史 deck 事件仍在日志里）。
+ * 本文件不 fold 状态、不缓存、不自行推导领域数据。
  *
  * 渲染逻辑（viewModel / statusLabel / statusTone / kindLabel / countItems）
  * 是纯函数，并通过 module.exports 暴露，供 test/client.test.mjs 直接覆盖。
@@ -36,14 +38,20 @@ window.__ModuleLoader__.load({
     var TAB_ID = 'agent-master:deck'
     /** tab 类型判别符。 */
     var TAB_KIND = 'agent-master.deck'
-    /** 宿主投影 key（lead 定的契约，不得改动）。 */
+    /** 宿主投影 key；旧会话的 deck 事件仍折在这里，作为快照缺失时的回退。 */
     var PROJECTION_KEY = 'agentMaster'
+    /** 指挥台快照的工作区相对目录（宿主 DECK_DIR_NAME 同一约定）。 */
+    var DECK_DIR_NAME = '.agent-master'
+    /** 每个 root 会话一份快照。 */
+    var DECK_FILE_NAME = 'deck.json'
+    /** changes 流不可用、或文件还没出现时的兜底轮询间隔（毫秒）。 */
+    var DECK_POLL_MS = 2000
     /** 面板文案的 locale 命名空间；没有字典时用中文兜底。 */
     var LOCALE_NS = 'agentMaster'
     /** 面板标题。 */
     var DECK_TITLE = '指挥台'
     /** 空态文案（票面逐字要求）。 */
-    var EMPTY_TEXT = '还没有下派任何子对话 —— 在主对话里用 master_assign 开一路'
+    var EMPTY_TEXT = '还没有下派任何子对话 —— 在主对话里用 master_dispatch / master_assign 开一路'
     /** 最近记录最多显示的条数。 */
     var RECENT_LIMIT = 12
     /** 官方子对话 tab 的地址前缀（dsh-client-ui-subagent/src/client/sidebar-chat/index.tsx:21）。 */
@@ -57,27 +65,45 @@ window.__ModuleLoader__.load({
     // 纯函数：把投影状态转成渲染用的视图模型（无 React、无副作用）
     // ---------------------------------------------------------------------
 
+    /** deck 契约版本：只认 2（ADR-0004，不保留 v1 适配层）。 */
+    var DECK_VERSION = 2
+
     /** 顶部计数的字段与中文标签，数组顺序即 UI 顺序。 */
     var COUNT_FIELDS = [
-      ['tasks', '任务'],
-      ['findings', '发现'],
-      ['sources', '来源'],
-      ['artifacts', '产物'],
+      ['cards', '卡片'],
+      ['doing', '在做'],
+      ['review', '待验收'],
       ['violations', '违规'],
+      ['records', '记录'],
     ]
 
-    /** 子对话状态 -> 徽标文案。 */
-    var STATUS_LABELS = { assigned: '已下派', reported: '已回报', violated: '违规' }
-    /** 子对话状态 -> 色调（muted 灰 / success 绿 / danger 红）。 */
-    var STATUS_TONES = { assigned: 'muted', reported: 'success', violated: 'danger' }
-    /** 黑板 kind -> 时间线标签。 */
+    /** 六种卡片状态 -> 徽标文案（顺序即看板列顺序：todo/assigned/doing/review/done/blocked）。 */
+    var STATUS_LABELS = {
+      todo: '待认领',
+      assigned: '已认领',
+      doing: '开工中',
+      review: '待验收',
+      done: '已完成',
+      blocked: '阻塞',
+    }
+    /** 六种状态 -> 色调：六种必须肉眼可分（票面验收第 1 条）。 */
+    var STATUS_TONES = {
+      todo: 'muted',
+      assigned: 'info',
+      doing: 'progress',
+      review: 'warn',
+      done: 'success',
+      blocked: 'danger',
+    }
+    /** 证据流 kind -> 时间线标签。 */
     var KIND_LABELS = {
-      task: '任务',
       finding: '发现',
       source: '来源',
       artifact: '产物',
       decision: '决策',
       open_question: '待确认',
+      card_status: '状态变更',
+      migrated: '迁移',
     }
 
     /** 数值兜底：非有限数一律当 0，避免 NaN 渲染成 'NaN'。 */
@@ -145,35 +171,47 @@ window.__ModuleLoader__.load({
       return CHAT_ADDRESS_PREFIX + encodeURIComponent(sessionId) + '?' + query
     }
 
-    /** 计数归一化：五组数字都不缺、不为 NaN。 */
+    /** 计数归一化：v2 的计数都补齐、不为 NaN（缺字段一律 0）。 */
     function normalizeCounts(source) {
       var value = source && typeof source === 'object' ? source : {}
       return {
-        tasks: num(value.tasks),
-        findings: num(value.findings),
-        sources: num(value.sources),
-        artifacts: num(value.artifacts),
+        cards: num(value.cards),
+        records: num(value.records),
         violations: num(value.violations),
+        todo: num(value.todo),
+        assigned: num(value.assigned),
+        doing: num(value.doing),
+        review: num(value.review),
+        done: num(value.done),
+        blocked: num(value.blocked),
       }
     }
 
-    /** 一条子对话 -> 卡片视角（带徽标文案与色调）。 */
-    function toCard(child) {
-      var source = child && typeof child === 'object' ? child : {}
+    /** 一张看板卡 -> 卡片视角（状态/认领者/P 级/rev 都直接来自快照，不自己推导）。 */
+    function toCard(card) {
+      var source = card && typeof card === 'object' ? card : {}
       var status = text(source.status)
+      var assignee = source.assignee && typeof source.assignee === 'object' ? source.assignee : null
+      var counts = source.counts && typeof source.counts === 'object' ? source.counts : {}
+      var assigneeName = ''
+      if (assignee !== null) {
+        assigneeName = text(assignee.name) || text(assignee.sessionId)
+      }
       return {
-        name: text(source.name),
+        id: text(source.id),
         label: text(source.label),
-        taskId: text(source.taskId),
-        // 点击卡片要用它打开子会话 tab（旧数据没有该字段时归一成空串）。
+        // 点击卡片要用它打开子会话 tab（没有子会话号时归一成空串）。
         sessionId: text(source.sessionId),
         status: status,
         statusText: statusLabel(status),
         tone: statusTone(status),
-        findings: num(source.findings),
-        evidence: num(source.evidence),
-        artifacts: num(source.artifacts),
-        violations: num(source.violations),
+        priority: text(source.priority),
+        rev: num(source.rev),
+        assigneeName: assigneeName,
+        findings: num(counts.findings),
+        sources: num(counts.sources),
+        artifacts: num(counts.artifacts),
+        violations: num(counts.violations),
       }
     }
 
@@ -231,14 +269,15 @@ window.__ModuleLoader__.load({
       }
       var running = 0
       var violated = false
-      for (var index = 0; index < model.children.length; index += 1) {
-        var card = model.children[index]
-        if (card.status === 'reported') continue
-        if (card.status === 'violated') violated = true
+      for (var index = 0; index < model.cards.length; index += 1) {
+        var card = model.cards[index]
+        // 「在动」= 还没结案：done 之外都算（blocked 也要人管）
+        if (card.status === 'done') continue
+        if (card.status === 'blocked') violated = true
         running += 1
       }
       if (model.counts.violations > 0) violated = true
-      var total = model.children.length
+      var total = model.cards.length
       var shown = running > 0 ? running : total
       return {
         text: total === 0 ? DECK_TITLE : DECK_TITLE + ' ' + shown + '/' + total,
@@ -270,31 +309,61 @@ window.__ModuleLoader__.load({
       }
     }
 
+    /**
+     * 契约不匹配时的占位文案：旧快照（v1）或没有 version 的历史数据都会走到这里。
+     * 数据还在盘上，只是这份客户端不再假装能读懂它 —— 显示占位而不是抛错（票面验收第 3 条）。
+     */
+    var INCOMPATIBLE_TEXT =
+      '这份指挥台快照是旧契约（v1）留下的：卡片状态、认领者、P 级都读不出来。' +
+      '数据没有丢，重新派发一次任务就会写出 v2 快照。'
+
     function viewModel(state) {
       if (state === null || state === undefined) {
         var emptyCounts = normalizeCounts(null)
         return {
           empty: true,
+          incompatible: false,
+          placeholderText: '',
           emptyText: EMPTY_TEXT,
-          headSeq: 0,
+          revision: 0,
           updatedAt: 0,
           counts: emptyCounts,
           countItems: countItems(emptyCounts),
-          children: [],
+          cards: [],
           recent: [],
           alert: null,
         }
       }
       var source = state && typeof state === 'object' ? state : {}
+
+      // 契约版本不匹配：不猜字段、不抛错，只给占位
+      if (num(source.version) !== DECK_VERSION) {
+        return {
+          empty: false,
+          incompatible: true,
+          placeholderText: INCOMPATIBLE_TEXT,
+          emptyText: EMPTY_TEXT,
+          revision: 0,
+          updatedAt: num(source.updatedAt),
+          counts: normalizeCounts(null),
+          countItems: countItems(normalizeCounts(null)),
+          cards: [],
+          recent: [],
+          alert: null,
+        }
+      }
+
       var counts = normalizeCounts(source.counts)
       return {
         empty: false,
+        incompatible: false,
+        placeholderText: '',
         emptyText: EMPTY_TEXT,
-        headSeq: num(source.headSeq),
+        revision: num(source.revision),
         updatedAt: num(source.updatedAt),
         counts: counts,
         countItems: countItems(counts),
-        children: list(source.children).map(toCard),
+        cards: list(source.cards).map(toCard),
         // 时间线只留最新 RECENT_LIMIT 条（新的在前）。
         recent: sortRecentDesc(list(source.recent)).slice(0, RECENT_LIMIT),
         alert: buildAlert(counts),
@@ -305,8 +374,15 @@ window.__ModuleLoader__.load({
     // 渲染层：只用 react 的 createElement，不引第三方组件库
     // ---------------------------------------------------------------------
 
-    /** 徽标、提示条用到的三种色调。 */
-    var TONE_COLORS = { muted: '#6b7280', success: '#15803d', danger: '#b91c1c' }
+    /** 徽标、提示条用到的色调（六种状态复用这六种颜色，保证肉眼可分）。 */
+    var TONE_COLORS = {
+      muted: '#6b7280',
+      info: '#2563eb',
+      progress: '#7c3aed',
+      warn: '#b45309',
+      success: '#15803d',
+      danger: '#b91c1c',
+    }
 
     /** 面板样式：内联对象，跟随主题变量并带浅色兜底。 */
     var STYLES = {
@@ -414,7 +490,7 @@ window.__ModuleLoader__.load({
         'div',
         { style: STYLES.header },
         h('span', { style: STYLES.title }, DECK_TITLE),
-        h('span', { style: STYLES.seq }, model.headSeq > 0 ? '黑板 #' + model.headSeq : '黑板尚无记录'),
+        h('span', { style: STYLES.seq }, model.revision > 0 ? '看板 rev ' + model.revision : '看板尚无记录'),
         model.updatedAt > 0 ? h('span', { style: STYLES.seq }, '更新于 ' + formatTime(model.updatedAt)) : null,
       )
     }
@@ -441,18 +517,31 @@ window.__ModuleLoader__.load({
       return h('div', { style: STYLES.sectionTitle }, props.text)
     }
 
-    /** 一张子对话卡片；有子会话号且拿到 opener 时可按官方寻址打开右侧栏 chat tab。 */
-    function ChildCard(props) {
+    /**
+     * 一张看板卡。状态徽标 + 认领者 + P 级一眼可见；有子会话号且拿到 opener 时，
+     * 点击按官方寻址打开右侧栏 chat tab（沿用既有能力）。
+     */
+    function CardRow(props) {
       var card = props.card
+      var tone = TONE_COLORS[card.tone] || TONE_COLORS.muted
       var badgeStyle = {
         padding: STYLES.badge.padding,
         borderRadius: STYLES.badge.borderRadius,
         border: STYLES.badge.border,
         fontSize: STYLES.badge.fontSize,
         whiteSpace: STYLES.badge.whiteSpace,
-        color: TONE_COLORS[card.tone] || TONE_COLORS.muted,
+        color: tone,
+        // 左侧色条也用同一色调，六种状态在列里更快分辨
+        borderLeftWidth: '3px',
+        borderLeftStyle: 'solid',
+        borderLeftColor: tone,
       }
-      var stats = '发现 ' + card.findings + ' · 证据 ' + card.evidence + ' · 产物 ' + card.artifacts
+      var meta = []
+      if (card.priority !== '') meta.push('优先级 ' + card.priority)
+      meta.push(card.assigneeName === '' ? '未认领' : '认领者 ' + card.assigneeName)
+      meta.push('rev ' + card.rev)
+
+      var stats = '发现 ' + card.findings + ' · 证据 ' + card.sources + ' · 产物 ' + card.artifacts
       if (card.violations > 0) stats += ' · 违规 ' + card.violations
 
       var open = props.onOpen
@@ -465,6 +554,7 @@ window.__ModuleLoader__.load({
             style: Object.assign({}, STYLES.card, STYLES.cardClickable),
             role: 'button',
             tabIndex: 0,
+            'data-status': card.status,
             title: '打开子对话（右侧栏）',
             onClick: openCard,
             onKeyDown: function (event) {
@@ -473,18 +563,21 @@ window.__ModuleLoader__.load({
               openCard()
             },
           }
-        : { style: STYLES.card, title: '这条记录没有子会话号，无法打开子对话' }
+        : {
+            style: STYLES.card,
+            'data-status': card.status,
+            title: card.sessionId === '' ? '这张卡还没有子会话号，无法打开子对话' : '打开子对话（右侧栏）',
+          }
       return h(
         'div',
         cardProps,
         h(
           'div',
           { style: STYLES.cardTop },
-          h('span', { style: STYLES.cardName }, card.name || '（未命名）'),
+          h('span', { style: STYLES.cardName }, (card.id ? card.id + ' · ' : '') + (card.label || '（无标题）')),
           h('span', { style: badgeStyle }, card.statusText),
         ),
-        card.label ? h('div', { style: STYLES.cardLabel }, card.label) : null,
-        card.taskId ? h('div', { style: STYLES.muted }, '任务 ' + card.taskId) : null,
+        h('div', { style: STYLES.muted }, meta.join(' · ')),
         h('div', { style: STYLES.muted }, stats),
       )
     }
@@ -509,6 +602,188 @@ window.__ModuleLoader__.load({
       return value === undefined ? null : value
     }
 
+    /** 会话 id 与宿主 sanitizeRootId 同规则净化，避免两半拼出不同路径。 */
+    function sanitizeSessionId(sessionId) {
+      return String(sessionId === null || sessionId === undefined ? '' : sessionId).replace(/[^A-Za-z0-9_-]/g, '-')
+    }
+
+    /** 宿主 publishDeck 写出的工作区相对路径（workspaceFiles 按会话工作区根解析）。 */
+    function deckRelativePath(sessionId) {
+      return DECK_DIR_NAME + '/' + sanitizeSessionId(sessionId) + '/' + DECK_FILE_NAME
+    }
+
+    /** 解析快照 JSON：接受 deck 本体或 { deck } 两种形状；坏数据返回 null。 */
+    function parseDeckText(raw) {
+      if (typeof raw !== 'string' || raw === '') return null
+      try {
+        var parsed = JSON.parse(raw)
+        if (parsed === null || typeof parsed !== 'object') return null
+        if (parsed.deck !== null && typeof parsed.deck === 'object') return parsed.deck
+        return parsed
+      } catch (error) {
+        return null
+      }
+    }
+
+    /** 懒取客户端 remote 服务：缺了也不阻塞装配（老宿主没有这个 Remote 时回退投影）。 */
+    function resolveRemote(ctx) {
+      try {
+        if (ctx && typeof ctx.get === 'function') return ctx.get('remote') || null
+        return ctx && ctx.remote ? ctx.remote : null
+      } catch (error) {
+        return null
+      }
+    }
+
+    /**
+     * 读一次快照：官方 workspaceFiles.read（路径相对会话工作区根）。
+     * 读不到（还没有文件 / 老宿主没有 Remote）返回 null，由调用方回退投影。
+     */
+    function readDeckFile(remote, sessionId, signal) {
+      if (!remote || !remote.workspaceFiles || typeof remote.workspaceFiles.read !== 'function') {
+        return Promise.resolve(null)
+      }
+      var id = sanitizeSessionId(sessionId)
+      if (id === '') return Promise.resolve(null)
+      var pending
+      try {
+        pending = remote.workspaceFiles.read(id, deckRelativePath(id), {}, signal)
+      } catch (error) {
+        return Promise.resolve(null)
+      }
+      return Promise.resolve(pending).then(function (result) {
+        if (result && result.ok === false) return null
+        var payload = result && result.ok === true ? result.value : result
+        var raw = payload && typeof payload.text === 'string' ? payload.text : ''
+        return parseDeckText(raw)
+      }, function () {
+        return null
+      })
+    }
+
+    /**
+     * 订阅快照变化：优先官方 workspaceFiles.changes 的文件级 watch，
+     * 流打不开（还没有文件 / 老宿主）就退回 DECK_POLL_MS 轮询。返回同步 disposer。
+     */
+    function subscribeDeckFile(remote, sessionId, onData) {
+      var stopped = false
+      var handle = null
+      var timer = null
+      var id = sanitizeSessionId(sessionId)
+
+      function emit(value) {
+        if (stopped || value === null || value === undefined) return
+        try {
+          onData(value)
+        } catch (error) {
+          // 渲染回调抛错不该打断订阅
+        }
+      }
+      function readOnce() {
+        readDeckFile(remote, id).then(emit, function () {})
+      }
+      function startPolling() {
+        if (timer !== null || stopped) return
+        timer = setInterval(readOnce, DECK_POLL_MS)
+      }
+      function consume(stream) {
+        var iterator
+        try {
+          iterator = stream[Symbol.asyncIterator]()
+        } catch (error) {
+          startPolling()
+          return
+        }
+        function next() {
+          if (stopped) return
+          var step
+          try {
+            step = iterator.next()
+          } catch (error) {
+            startPolling()
+            return
+          }
+          Promise.resolve(step).then(function (result) {
+            if (stopped) return
+            if (result.done) {
+              startPolling()
+              return
+            }
+            var item = result.value
+            try {
+              if (item && typeof item.accept === 'function') item.accept()
+            } catch (error) {
+              // accept 失败不影响再读一次
+            }
+            readOnce()
+            next()
+          }, function () {
+            startPolling()
+          })
+        }
+        next()
+      }
+
+      readOnce()
+      if (id !== '' && remote && typeof remote.$stream === 'function'
+        && remote.workspaceFiles && typeof remote.workspaceFiles.changes === 'function') {
+        try {
+          var stream = remote.$stream({
+            name: 'agent-master deck ' + id,
+            open: function (lifetime) {
+              return remote.workspaceFiles.changes(id, deckRelativePath(id), lifetime)
+            },
+            ended: function () {
+              return new Error('agent-master deck watch ended')
+            },
+          })
+          if (stream && typeof stream[Symbol.asyncIterator] === 'function') {
+            handle = stream
+            consume(stream)
+          } else {
+            startPolling()
+          }
+        } catch (error) {
+          startPolling()
+        }
+      } else {
+        startPolling()
+      }
+
+      return function () {
+        stopped = true
+        if (timer !== null) clearInterval(timer)
+        timer = null
+        if (handle && typeof handle.dispose === 'function') {
+          try {
+            handle.dispose()
+          } catch (error) {
+            // 已断开的流 dispose 抛错无所谓
+          }
+        }
+        handle = null
+      }
+    }
+
+    /**
+     * 指挥台状态：快照优先，老会话（没有快照文件）回退到投影。
+     * 订阅跟着 sessionId 走；组件卸载时由 effect 的返回值断开。
+     */
+    function useDeckState(props) {
+      var fallback = readProjection(props)
+      var pair = React.useState(null)
+      var current = pair[0]
+      var setCurrent = pair[1]
+      var sessionId = props ? props.sessionId : undefined
+      React.useEffect(function () {
+        if (!props || typeof props.subscribeDeck !== 'function' || !sessionId) return undefined
+        return props.subscribeDeck(sessionId, function (value) {
+          if (value !== null && value !== undefined) setCurrent(value)
+        })
+      }, [sessionId])
+      return current !== null && current !== undefined ? current : fallback
+    }
+
     /**
      * 指挥台正文。
      * props 来自 session 作用域 seat：sessionId 与 useProjection；openChild 由本插件在
@@ -531,9 +806,9 @@ window.__ModuleLoader__.load({
       )
     }
 
-    /** 会话头胶囊：session 作用域有 useProjection，能显示「还没回报/总数」。 */
+    /** 会话头胶囊：session 作用域，能显示「还没回报/总数」（快照优先，投影回退）。 */
     function HeaderDeckPill(props) {
-      var badge = deckBadge(readProjection(props))
+      var badge = deckBadge(useDeckState(props))
       var style = STYLES.pill
       if (badge.tone === 'danger' || badge.tone === 'success') {
         style = Object.assign({}, style, { color: TONE_COLORS[badge.tone] })
@@ -554,8 +829,8 @@ window.__ModuleLoader__.load({
     }
 
     function DeckPanel(props) {
-      // hooks 规则：useProjection 必须无条件调用，所以放在所有分支之前。
-      var state = readProjection(props)
+      // hooks 规则：useDeckState（内部含 useState/useEffect/useProjection）必须无条件调用。
+      var state = useDeckState(props)
       var model = viewModel(state)
 
       if (model.empty) {
@@ -567,20 +842,30 @@ window.__ModuleLoader__.load({
         )
       }
 
+      // 旧契约快照：只给占位提示，不渲染半截数据、也不抛错
+      if (model.incompatible) {
+        return h(
+          'div',
+          { style: STYLES.root, 'data-agent-master': 'deck', 'data-deck-version': 'incompatible' },
+          h(DeckHeader, { model: model }),
+          h('div', { style: STYLES.empty }, model.placeholderText),
+        )
+      }
+
       return h(
         'div',
         { style: STYLES.root, 'data-agent-master': 'deck' },
         h(DeckHeader, { model: model }),
         model.alert ? h(AlertRow, { alert: model.alert }) : null,
         h(CountsRow, { items: model.countItems }),
-        h(SectionTitle, { text: '子对话' }),
-        model.children.length > 0
+        h(SectionTitle, { text: '看板' }),
+        model.cards.length > 0
           ? h(
               'div',
               { style: STYLES.cards },
-              model.children.map(function (card, index) {
-                return h(ChildCard, {
-                  key: card.taskId || card.name || String(index),
+              model.cards.map(function (card, index) {
+                return h(CardRow, {
+                  key: card.id || String(index),
                   card: card,
                   // 父会话号就是面板自己的 sessionId（seat 注入），在这里绑好再交给卡片。
                   onOpen:
@@ -592,7 +877,7 @@ window.__ModuleLoader__.load({
                 })
               }),
             )
-          : h('div', { style: STYLES.muted }, '还没有记录到子对话 —— 已下派的子对话会出现在这里'),
+          : h('div', { style: STYLES.muted }, '看板上还没有卡 —— 用 master_dispatch 或 master_assign 派一路'),
         h(SectionTitle, { text: '最近记录' }),
         model.recent.length > 0
           ? h(
@@ -753,9 +1038,9 @@ window.__ModuleLoader__.load({
     }
 
     /** 正常路径：stage1 声明 tab 类型，stage2 按同一个 id 挂正文与标题。 */
-    function installSidebarSeats(ctx, translate, openChild, openDeck) {
-      // openChild / openDeck 在 apply 里只造一次，注入的 props 也保持同一引用，避免每次渲染都换新对象。
-      var injectedProps = { openChild: openChild, openDeck: openDeck }
+    function installSidebarSeats(ctx, translate, openChild, openDeck, subscribeDeck) {
+      // 闭包在 apply 里只造一次，注入的 props 也保持同一引用，避免每次渲染都换新对象。
+      var injectedProps = { openChild: openChild, openDeck: openDeck, subscribeDeck: subscribeDeck }
       effect(ctx, function () {
         return ctx.sidebarRightTabs.register({
           id: TAB_ID,
@@ -842,9 +1127,13 @@ window.__ModuleLoader__.load({
       var openDeck = function () {
         return openDeckTab(ctx)
       }
+      var remote = resolveRemote(ctx)
+      var subscribeDeck = function (sessionId, onData) {
+        return subscribeDeckFile(remote, sessionId, onData)
+      }
       if (ctx.sidebarRightTabs && typeof ctx.sidebarRightTabs.register === 'function') {
         try {
-          installSidebarSeats(ctx, translate, openChild, openDeck)
+          installSidebarSeats(ctx, translate, openChild, openDeck, subscribeDeck)
           return
         } catch (error) {
           warn('agent-master 客户端：右侧栏座位注册失败，退回 shell.overlay。', error)
@@ -865,15 +1154,22 @@ window.__ModuleLoader__.load({
     exports.kindLabel = kindLabel
     exports.countItems = countItems
     exports.chatAddress = chatAddress
+    exports.toneColors = TONE_COLORS
     exports.deckBadge = deckBadge
     exports.openDeckTab = openDeckTab
+    exports.deckRelativePath = deckRelativePath
+    exports.parseDeckText = parseDeckText
+    exports.subscribeDeck = subscribeDeckFile
     exports.constants = Object.freeze({
       PACKAGE_ID: PACKAGE_ID,
       TAB_ID: TAB_ID,
       TAB_KIND: TAB_KIND,
       PROJECTION_KEY: PROJECTION_KEY,
+      DECK_DIR_NAME: DECK_DIR_NAME,
+      DECK_FILE_NAME: DECK_FILE_NAME,
       EMPTY_TEXT: EMPTY_TEXT,
       RECENT_LIMIT: RECENT_LIMIT,
+      DECK_VERSION: DECK_VERSION,
       DECK_TITLE: DECK_TITLE,
       CHAT_ADDRESS_PREFIX: CHAT_ADDRESS_PREFIX,
       DEFAULT_CHAT_MODE: DEFAULT_CHAT_MODE,
