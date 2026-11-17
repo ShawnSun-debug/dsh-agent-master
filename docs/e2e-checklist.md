@@ -10,6 +10,16 @@
 - [x] profile `dsh.profile.bundles` 含 `dsh-agent-master`
 - [x] `node_modules/dsh-agent-master` 解析到本仓库真实路径
 
+## 0.4 重启后先跑这条（一条命令看全部判据）
+
+```
+node scripts/verify-restart.mjs        # 加 --json 可机读
+```
+
+✅ = 已有落盘证据；⚠️ = 需要真的派一路/验收一次才会出现；❌ = 硬失败。
+**`Master 会话记录` 必须是 ✅**，否则 §1.5 的 Master 会话根本不会出现在左栏——
+用 `DSH_AGENT_MASTER_DEBUG=1` 重启一次，看 stderr 里的 `[agent-master] master:` 诊断。
+
 ## 0.5 服务端已在真宿主验证（2026-11-18，headless + 真模型）
 
 用一个临时 profile（`@deepseek-ai/dsh-base` + `@deepseek-ai/dsh-headless` + 本插件）把插件装进**真宿主**、

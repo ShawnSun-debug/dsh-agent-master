@@ -95,6 +95,8 @@
 
 ## 7. 下一个动作
 
-1. **重启 DSH**（会结束当前会话，必须由用户操作；新代码只在重启后生效）→ 在桌面应用里从固定 Master 会话派一路，勾 `docs/e2e-checklist.md` **GUI 三条**：审批卡片真的弹且批准能 spawn / 拒绝零副作用、`changes` 流或 2s 轮询能自动刷新、六状态目视可辨。
+1. **重启 DSH**（会结束当前会话，必须由用户操作；新代码只在重启后生效）。
+2. 重启后先跑 `node scripts/verify-restart.mjs`：`masters/*.json` 出现 = Master 会话引导成功；若仍是 ❌，用 `DSH_AGENT_MASTER_DEBUG=1` 重启一次看 stderr 里的 `[agent-master] master:` 诊断。
+3. 再在桌面应用里从固定 Master 会话派一路，勾 `docs/e2e-checklist.md` **GUI 三条**：审批卡片真的弹且批准能 spawn / 拒绝零副作用、`changes` 流或 2s 轮询能自动刷新、六状态目视可辨。
 2. 任何一条 ❌：先看 PROGRESS §5 的两条修复记录 —— 大概率是宿主 API 行为与 asar 证据不符，**回去读 `.scratch/api-notes.md` 再改**。
 3. 可选后续（未开工，也没有票）：`chooseDispatch` 从「提示词纪律」升级成硬闸门；客户端改成构建产物（现在是手写经典脚本）。
