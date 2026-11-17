@@ -585,7 +585,7 @@ test('wiring：rootOf 抛错时兜底用 exec.agent.id，无 cwd 只记诊断，
   }
 })
 
-test('wiring：只有 assign/report/collect/board 刷新 deck，digest/experience 不写', async () => {
+test('wiring：只有 assign/dispatch/report/collect/board 刷新 deck，digest/experience 不写', async () => {
   const dir = await makeTempDir()
   try {
     const { ctx, calls } = fakeCtx({ rootOf: (agent) => agent })
@@ -643,6 +643,21 @@ test('wiring：只有 assign/report/collect/board 刷新 deck，digest/experienc
     assert.equal(deck.counts.cards, 1)
     assert.equal(deck.cards[0].status, 'assigned')
     assert.equal(deck.revision, 2)
+    await rm(deckPath)
+
+    // 5. 批量派发也会建卡：必须和单路 assign 一样刷新快照
+    const dispatched = await findTool(calls, 'master_dispatch').execute(
+      { briefs: [{ label: 'B', brief: { goal: '任务二', constraints: ['只读'] } }] },
+      { agent },
+    )
+    assert.equal(dispatched.dispatched, 1, '批量派发应成功一路')
+    assert.equal(existsSync(deckPath), true, 'master_dispatch 必须刷新快照')
+    const afterDispatch = await readDeck(dir, 'root-1')
+    assert.equal(afterDispatch.counts.cards, 2, '批量建的第二张卡要立刻出现在快照里')
+    assert.deepEqual(
+      afterDispatch.cards.map((card) => card.label),
+      ['任务一', '任务二'],
+    )
   } finally {
     await rm(dir, { recursive: true, force: true })
   }
@@ -736,6 +751,33 @@ test('wiring：deck 快照落在 root 会话的工作区，不是发起调用的
     assert.equal(deck.counts.records, 3)
   } finally {
     await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('wiring：root 会话没有 cwd 时 deck 退回调用方工作区（不静默丢快照）', async () => {
+  const dir = await makeTempDir()
+  const callerDir = await makeTempDir()
+  try {
+    const { ctx, calls } = fakeCtx()
+    // root 活着但 cwd 为空：必须退到调用方会话，而不是只记诊断
+    const root = makeAgent('root-1', '')
+    const caller = makeAgent('sess-caller', callerDir)
+    ctx.subagents.rootOf = () => root
+    await apply(ctx, { dataDir: dir })
+
+    const assigned = await findTool(calls, 'master_assign').execute(
+      { label: 'A', brief: { goal: '任务一' } },
+      { agent: caller },
+    )
+    assert.equal(assigned.ok, true)
+    assert.equal(assigned.taskId, 't1')
+    assert.equal(existsSync(deckPathOf(callerDir, 'root-1')), true, '应退回到有 cwd 的调用方工作区')
+    assert.equal(existsSync(join(dir, '.agent-master')), false, 'dataDir 下不该出现快照')
+    assert.equal(root.appended.length, 0)
+    assert.equal(caller.appended.length, 0, '仍然不写任何会话事件')
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+    await rm(callerDir, { recursive: true, force: true })
   }
 })
 

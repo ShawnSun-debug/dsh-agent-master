@@ -16,3 +16,14 @@ rejected → 失败返回、不 spawn、台账保留可重试；无人应答 →
 正面：规则变成硬门禁，模型无法自行放行；批量审批把点击成本压到一次。
 负面：依赖宿主 approval 服务的形状；never 会话里该功能不可用（这是有意为之）；审批卡内容质量决定了人能不能有效判断。
 被放弃的方案：master 在对话里贴计划等人回「批准」（君子协定）；派一个 reviewer agent 审（人失去否决权）。
+
+## 实做偏差（2026-11-18，T11 落地时核对宿主源码后）
+
+宿主 `ApprovalRequest` 只有 `{agent, toolName, callId, reason, displayReason, signal}`，**没有超时字段**；管线收到 `{kind:'ask'}` 后调 `serviceAsk`，挂起多久由调用方 `signal` 决定。为了真能让 `approvalWaitMs` 到点失败，实现改为：
+
+- 门禁**自己调** `ctx.get('approval').request(...)`，源头上仍是同一个 approval 服务、同一张审计卡；
+- 自带 `AbortController` 计时（`approvalWaitMs`，默认 600000），到点 abort 请求并按 `rejected` 处理；
+- fail-closed 不变：`rejected` / `cancelled` / `unavailable` / 超时一律不派发、不建卡、不 spawn；
+- `policy=never` 时服务返回 `rejected`，拒绝文案点名 `never` 并提示先开启审批。
+
+若宿主未来给 `request` 增加 timeout 参数，这一层可退化为纯透传（门禁只渲染计划与返回 decision）。
