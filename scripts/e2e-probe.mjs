@@ -14,7 +14,7 @@
  */
 
 import { spawn } from 'node:child_process'
-import { existsSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -22,10 +22,20 @@ import { dshHome } from '../lib/config.js'
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url))
 const TMP = join(ROOT, '.test-tmp')
+// 隔离 DSH_HOME：这场 E2E 建的会话、写的配置全落在仓内临时目录，
+// 绝不碰用户 ~/.dsh（否则会在他的桌面端会话列表里冒出测试会话）。
+// 想复用真环境排障时设 DSH_E2E_SHARED_HOME=1。
+const SHARED_HOME = process.env.DSH_E2E_SHARED_HOME === '1'
+const ISOLATED_HOME = join(TMP, 'dsh-home-e2e')
+if (!SHARED_HOME) process.env.DSH_HOME = ISOLATED_HOME
+
 const PROFILE_NAME = 'probe-e2e'
 const PROFILE_DIR = join(dshHome(), 'profiles', PROFILE_NAME)
 const BROWSER_DIR = join(TMP, 'e2e-browser')
+const SHOT_FILE = join(TMP, 'deck-panel.png')
 const KEEP = process.argv.includes('--keep')
+/** --with-data：建真会话 + 写真 deck 快照，验收「有卡片时的渲染与读数」。 */
+const WITH_DATA = process.argv.includes('--with-data')
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 const log = (message) => console.log(message)
@@ -180,6 +190,7 @@ async function openPage(browserPath, url) {
   const ws = new WebSocket(target.webSocketDebuggerUrl)
   const pending = new Map()
   const logs = []
+  const warnings = []
   let nextId = 1
   ws.addEventListener('message', (event) => {
     const message = JSON.parse(event.data)
@@ -190,8 +201,10 @@ async function openPage(browserPath, url) {
       else entry.resolve(message.result)
       return
     }
-    if (message.method === 'Runtime.consoleAPICalled' && message.params.type === 'error') {
-      logs.push('[console.error] ' + message.params.args.map((arg) => arg.value ?? arg.description ?? arg.type).join(' '))
+    if (message.method === 'Runtime.consoleAPICalled') {
+      const line = '[console.' + message.params.type + '] ' + message.params.args.map((arg) => arg.value ?? arg.description ?? arg.type).join(' ')
+      if (message.params.type === 'error') logs.push(line)
+      else warnings.push(line)
     } else if (message.method === 'Runtime.exceptionThrown') {
       const details = message.params.exceptionDetails
       logs.push('[exception] ' + (details.exception?.description ?? details.text))
@@ -207,13 +220,115 @@ async function openPage(browserPath, url) {
   await new Promise((resolve) => ws.addEventListener('open', resolve, { once: true }))
   await send('Page.enable')
   await send('Runtime.enable')
+  // 固定一个足够宽的视口：右栏 + 主对话并排时才看得清面板（默认 800x600 会裁字）。
+  await send('Emulation.setDeviceMetricsOverride', { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false })
   await send('Page.navigate', { url })
   await sleep(6000)
+  // 首次运行会弹「预览版说明」，它会盖住一切；有就点继续。
+  await send('Runtime.evaluate', {
+    expression: "(function(){ var b = Array.from(document.querySelectorAll('button')).find(function(e){ return (e.textContent||'').trim() === '继续' }); if (b) { b.click(); return 'DISMISSED' } return 'NONE' })()",
+    returnByValue: true,
+  })
+  await sleep(800)
   const evaluate = async (expression) => {
     const result = await send('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true })
     return result.result?.value
   }
-  return { child, ws, logs, evaluate }
+  return { child, ws, logs, warnings, evaluate, send }
+}
+
+/** 造一份和真快照同形状的 deck v2（字段与 client/client.js viewModel 对齐）。 */
+function deckFixture() {
+  const now = Date.now()
+  return {
+    version: 2,
+    revision: 42,
+    updatedAt: now,
+    cards: [
+      {
+        id: 't1',
+        label: '修指挥台空白',
+        status: 'done',
+        priority: 'P0',
+        rev: 3,
+        assignee: { sessionId: 'session-aaaa1111', name: 'worker-a' },
+        sessionId: 'session-aaaa1111',
+        counts: { findings: 3, sources: 2, artifacts: 1, violations: 0 },
+        updatedAt: now,
+      },
+      {
+        id: 't2',
+        label: '看板数据层',
+        status: 'doing',
+        priority: 'P1',
+        rev: 2,
+        assignee: { sessionId: 'session-bbbb2222', name: 'worker-b' },
+        sessionId: 'session-bbbb2222',
+        counts: { findings: 1, sources: 0, artifacts: 0, violations: 1 },
+        updatedAt: now,
+      },
+      {
+        id: 't3',
+        label: '文档收尾',
+        status: 'review',
+        priority: 'P2',
+        rev: 5,
+        assignee: null,
+        sessionId: '',
+        counts: { findings: 2, sources: 1, artifacts: 0, violations: 0 },
+        updatedAt: now,
+      },
+    ],
+    counts: { cards: 3, records: 9, violations: 1, todo: 0, assigned: 0, doing: 1, review: 1, done: 1, blocked: 0 },
+    recent: [{ seq: 9, kind: 'card_status', cardId: 't1', title: 'review → done' }],
+  }
+}
+
+/**
+ * 数据场景：建会话 → 按会话 cwd 写真 deck → 用会话头胶囊打开面板 → 断言卡片渲染。
+ * 返回建立的 deck 目录（供清理）；失败时抛错由 main 汇总。
+ */
+async function runDataScenario(page) {
+  await page.evaluate("(function(){ var b = Array.from(document.querySelectorAll('button')).find(function(e){ return (e.textContent||'').indexOf('新会话') >= 0 }); if (b) b.click(); return 'ok' })()")
+  await sleep(5000)
+  const sessionId = await page.evaluate("(function(){ var n = document.querySelector('[data-conversation-session]'); return n ? n.getAttribute('data-conversation-session') : '' })()")
+  check('能建出真会话', typeof sessionId === 'string' && sessionId.startsWith('session-'), String(sessionId))
+  if (!sessionId) return null
+
+  const cacheFile = join(dshHome(), 'storages', 'session_projcache', 'sessions', sessionId + '.json')
+  let cwd = ''
+  try {
+    cwd = JSON.parse(readFileSync(cacheFile, 'utf8')).record.identity.cwd
+  } catch {
+    // 读不到 cwd 就走下面的断言分支
+  }
+  check('读得到会话工作区', typeof cwd === 'string' && cwd !== '', String(cwd))
+  if (!cwd) return null
+
+  const deckDir = join(cwd, '.agent-master', sessionId)
+  mkdirSync(deckDir, { recursive: true })
+  writeFileSync(join(deckDir, 'deck.json'), JSON.stringify(deckFixture(), null, 2), 'utf8')
+
+  const opened = await page.evaluate("(function(){ var b = document.querySelector('[data-agent-master=\"deck-pill\"]'); if (!b) return 'NO_PILL'; b.click(); return 'CLICKED' })()")
+  // 找不到时把现场抖出来，别只报 NO_PILL（排障全靠这段）
+  const pillDiag = opened === 'CLICKED'
+    ? ''
+    : await page.evaluate("JSON.stringify({ markers: Array.from(document.querySelectorAll('[data-agent-master]')).map(function(e){ return e.getAttribute('data-agent-master') }), slots: Array.from(new Set(Array.from(document.querySelectorAll('[data-slot]')).map(function(e){ return e.getAttribute('data-slot') }))).sort() })")
+  check('会话头胶囊存在（点开指挥台）', opened === 'CLICKED', String(opened) + (pillDiag ? ' :: ' + pillDiag : ''))
+  await sleep(3500)
+
+  const text = await page.evaluate("(function(){ var n = document.querySelector('[data-agent-master=\"deck\"]'); return n ? (n.innerText||'') : '' })()")
+  check('面板渲染出真实卡片', typeof text === 'string' && text.includes('修指挥台空白') && text.includes('看板数据层'), JSON.stringify(String(text).slice(0, 220)))
+  check('面板显示状态与优先级', typeof text === 'string' && /P0|P1/.test(text) && /进行中|待验收|已完成/.test(text), JSON.stringify(String(text).slice(0, 220)))
+  return { deckDir, text }
+}
+
+/** 截一张面板图，返回文件路径（给人工/模型看渲染效果）。 */
+async function screenshot(page) {
+  const shot = await page.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: true })
+  if (!shot || typeof shot.data !== 'string') return null
+  writeFileSync(SHOT_FILE, Buffer.from(shot.data, 'base64'))
+  return SHOT_FILE
 }
 
 async function main() {
@@ -223,6 +338,7 @@ async function main() {
 
   let host = null
   let page = null
+  let scenario = null
   try {
     host = await startHost()
     log('  宿主：' + host.url)
@@ -236,19 +352,30 @@ async function main() {
 
     await sleep(2500)
     const panel = await page.evaluate("JSON.stringify({ nodes: Array.from(document.querySelectorAll('[data-agent-master=\"deck\"]')).map(function (e) { return (e.innerText || '').slice(0, 300) }) })")
+    if (page.warnings.length > 0) log('  控制台警告：' + page.warnings.slice(0, 4).join(' | '))
     const parsed = JSON.parse(panel || '{}')
     const text = (parsed.nodes && parsed.nodes[0]) || ''
     check('面板真渲染出正文（不再空白）', text.length > 0, JSON.stringify(text).slice(0, 200))
     check('面板有可读空状态文案', text.includes('指挥台') && (text.includes('还没有下派') || text.includes('看板')), JSON.stringify(text).slice(0, 200))
     check('控制台没有错误', page.logs.length === 0, page.logs.slice(0, 3).join(' | '))
+
+    if (WITH_DATA) {
+      scenario = await runDataScenario(page)
+      const shot = await screenshot(page)
+      if (shot !== null) log('  截图：' + shot)
+      check('数据场景没有新增控制台错误', page.logs.length === 0, page.logs.slice(0, 3).join(' | '))
+    }
   } finally {
     try { page?.ws?.close() } catch {}
     killTree(page?.child)
     killTree(host?.child)
+    // 只删本脚本造的那份 deck（不动用户真实数据）
+    if (scenario && scenario.deckDir) removeBestEffort(scenario.deckDir)
     if (!KEEP) {
       // 清理失败不算验收失败（进程句柄回收慢），但要如实打出来。
       if (!removeBestEffort(BROWSER_DIR)) log('  注意：浏览器目录没能删干净，可手动删 ' + BROWSER_DIR)
       if (!removeBestEffort(PROFILE_DIR)) log('  注意：临时 profile 没能删干净，可手动删 ' + PROFILE_DIR)
+      if (!SHARED_HOME) removeBestEffort(ISOLATED_HOME)
     }
   }
 

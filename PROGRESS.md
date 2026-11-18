@@ -161,11 +161,21 @@
 - 防回归：`test/client.test.mjs` 两条（inject 必须含 remote 两项 + 敌意 remote 不许抛）；
   以及新脚本 `scripts/e2e-probe.mjs`（`npm run test:e2e`）在**独立 profile** 里用真浏览器验收：入口出现 → 点击 → 面板渲染正文 → 控制台零错误。
 
+### 5.8 会话头计数胶囊从不出现 + 一个座位冲突废掉整组（2026-11-18）
+
+- 现象：`conversation.session.header.utilities` 上挂的「看板 N/M」胶囊在真宿主里**从来不渲染**；把槽位名改成实测存在的 `conversation.session.header.corner` 后，**右栏指挥台和左栏入口一起消失**，只剩 `deck-unavailable` 降级。
+- 取证：E2E 里把页面所有 `[data-slot]` 抓出来比对 —— 0.2.2-rc.5 只渲染 `conversation.session.header` / `.corner` 等，**没有 `.utilities`**；改到 `.corner` 后控制台警告原文：`single slot "conversation.session.header.corner" already has a registration at priority 0 (registered by WC)`。
+- 根因：① 槽位名是猜的，宿主没有就永远不触发（注册不报错，静默失效）；② `.corner` 是**单占位**槽位，重复注册会抛错，而这个抛错发生在 `installSidebarSeats` 内、被外层 catch 当成「整组座位不可用」，于是一个座位废掉全部。
+- 修复：① 胶囊改挂 `conversation.input.left`（宿主实测空着、session 作用域，渲染在输入框左侧）；② 新增 `seat()` 守卫，**每个座位独立 try/catch**，失败只记警告；③ `formatTime` 不再用 `toLocaleString()`（真机显示 `19/11/2026 上午12:45:08`），改固定 `YYYY-MM-DD HH:mm`。
+- 防回归：`test/client.test.mjs` 三条（四个座位都挂上、单座位抛错不许拖垮其它、时间格式与 locale 无关）；E2E 的 `--with-data` 会把真会话 + 真 deck 快照喂进去，断言胶囊可点、卡片/状态/优先级渲染。
+
 ## 6. 雷区（踩过的）
 
 - **不要用 `%TEMP%`**：沙箱进程 `mkdtemp` 报 EPERM，一律用仓内 `.test-tmp`（`scripts/test.mjs` 已处理）。
 - **客户端插件必须把用到的每个服务写进 `exports.inject`（纯数组）**：漏一个，取用即抛 `without inject`，
   而抛在 effect 里就是整片空白；写成对象形态会让插件永远 pending（见 5.7）。
+- **槽位名别猜，要从真宿主页面抓 `[data-slot]`**：宿主没有的槽位注册了也不报错，只是永远不触发（见 5.8）。
+- **单占位槽位重复注册会抛错**：一个座位抛错不许拖垮整组，每个座位各自兜错（见 5.8）。
 - **三方插件不能写自定义会话事件**（见 5.2）。投影 `agentMaster` 只作为旧会话回退。
 - **`board.getCard(id)` 返回 `{card, records}`**，不是卡本身；存储层卡片的标题字段是 `title`（`label` 是 deck 的展示字段）。
 - **`master_board op=accept` 必须带 `verdict`（accept/rework/abort）**，且 `accept` 必须给 `experience` 或显式 `experienceNone:true` —— 静默跳过沉淀会被当场拒绝。

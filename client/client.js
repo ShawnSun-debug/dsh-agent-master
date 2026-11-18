@@ -474,10 +474,23 @@ window.__ModuleLoader__.load({
       return React.createElement.apply(React, [type, props].concat(children))
     }
 
-    /** 时间戳 -> 本地时间文本；非法值返回空串（不抛错）。 */
+    /**
+     * 时间戳 -> `YYYY-MM-DD HH:mm`（本地时区，补零）；非法值返回空串（不抛错）。
+     *
+     * 不用 toLocaleString：它跟着宿主 locale 变（真机截到 "19/11/2026 上午12:45:08"），
+     * 同一份快照在不同机器上显示不同、也没法一眼比先后。
+     */
     function formatTime(timestamp) {
       try {
-        return new Date(timestamp).toLocaleString()
+        var value = Number(timestamp)
+        if (!Number.isFinite(value) || value <= 0) return ''
+        var date = new Date(value)
+        if (Number.isNaN(date.getTime())) return ''
+        var pad = function (n) {
+          return n < 10 ? '0' + n : String(n)
+        }
+        return date.getFullYear() + '-' + pad(date.getMonth() + 1) + '-' + pad(date.getDate())
+          + ' ' + pad(date.getHours()) + ':' + pad(date.getMinutes())
       } catch (error) {
         return ''
       }
@@ -1065,6 +1078,27 @@ window.__ModuleLoader__.load({
     function installSidebarSeats(ctx, translate, openChild, openDeck, subscribeDeck) {
       // 闭包在 apply 里只造一次，注入的 props 也保持同一引用，避免每次渲染都换新对象。
       var injectedProps = { openChild: openChild, openDeck: openDeck, subscribeDeck: subscribeDeck }
+
+      /**
+       * 挂一个座位：单个座位失败只记警告，绝不牵连其它座位。
+       *
+       * 真机踩过两次：① 单占位 slot（如 conversation.session.header.corner）已有宿主
+       * 注册时 ctx.slots.register 抛 "single slot ... already has a registration"；
+       * ② 这个抛错发生在 installSidebarSeats 里，被外层 catch 当成「整组座位不可用」，
+       * 于是右栏指挥台、左栏入口全都不见了，只剩 overlay 降级 —— 一个座位废掉全部。
+       */
+      function seat(slotName, label, register) {
+        effect(ctx, function () {
+          return ctx.slots.inject(slotName, function () {
+            try {
+              return register()
+            } catch (error) {
+              warn('agent-master 客户端：座位注册失败（' + label + ' / ' + slotName + '），只跳过这个座位。', error)
+              return null
+            }
+          })
+        }, 'agent-master: ' + label)
+      }
       effect(ctx, function () {
         return ctx.sidebarRightTabs.register({
           id: TAB_ID,
@@ -1076,62 +1110,57 @@ window.__ModuleLoader__.load({
         })
       }, 'agent-master: 指挥台 tab 类型')
 
-      effect(ctx, function () {
-        return ctx.slots.inject('sidebar.right.pane.tab', function () {
-          return ctx.slots.register(
-            {
-              name: 'sidebar.right.pane.tab',
-              key: TAB_ID,
-              // 宿主渲染时把 entry.inject 的返回值并进组件 props（scoped-slots.tsx:672），
-              // 面板因此拿到打开子对话的闭包，不必自己去摸 ctx。
-              inject: function () {
-                return injectedProps
-              },
+      seat('sidebar.right.pane.tab', '指挥台面板', function () {
+        return ctx.slots.register(
+          {
+            name: 'sidebar.right.pane.tab',
+            key: TAB_ID,
+            // 宿主渲染时把 entry.inject 的返回值并进组件 props（scoped-slots.tsx:672），
+            // 面板因此拿到打开子对话的闭包，不必自己去摸 ctx。
+            inject: function () {
+              return injectedProps
             },
-            DeckPanel,
-          )
-        })
-      }, 'agent-master: 指挥台面板')
+          },
+          DeckPanel,
+        )
+      })
 
-      effect(ctx, function () {
-        return ctx.slots.inject('sidebar.right.pane.tab.title', function () {
-          return ctx.slots.register({ name: 'sidebar.right.pane.tab.title', key: TAB_ID }, DeckTabTitle)
-        })
-      }, 'agent-master: 指挥台标签标题')
+      seat('sidebar.right.pane.tab.title', '指挥台标签标题', function () {
+        return ctx.slots.register({ name: 'sidebar.right.pane.tab.title', key: TAB_ID }, DeckTabTitle)
+      })
 
       // 会话头胶囊：session 作用域，能读投影，所以「还没回报/总数」放这里。
-      effect(ctx, function () {
-        return ctx.slots.inject('conversation.session.header.utilities', function () {
-          return ctx.slots.register(
-            {
-              name: 'conversation.session.header.utilities',
-              id: HEADER_UTILITY_ID,
-              order: 100,
-              inject: function () {
-                return injectedProps
-              },
+      // 槽位名是从真宿主页面实测来的（0.2.2-rc.5 只渲染
+      // conversation.session.header / .corner 等；早先猜的 .utilities 这版不存在，
+      // 注册了也永远不触发 —— 真机踩过：胶囊一直不出现）。
+      seat('conversation.input.left', '会话头计数', function () {
+        return ctx.slots.register(
+          {
+            name: 'conversation.input.left',
+            id: HEADER_UTILITY_ID,
+            order: 100,
+            inject: function () {
+              return injectedProps
             },
-            HeaderDeckPill,
-          )
-        })
-      }, 'agent-master: 会话头计数')
+          },
+          HeaderDeckPill,
+        )
+      })
 
       // 左栏底部入口：root 作用域，点了直接把右栏指挥台打开。
-      effect(ctx, function () {
-        return ctx.slots.inject('sidebar.footer.action', function () {
-          return ctx.slots.register(
-            {
-              name: 'sidebar.footer.action',
-              id: FOOTER_ACTION_ID,
-              order: 100,
-              inject: function () {
-                return injectedProps
-              },
+      seat('sidebar.footer.action', '左栏入口', function () {
+        return ctx.slots.register(
+          {
+            name: 'sidebar.footer.action',
+            id: FOOTER_ACTION_ID,
+            order: 100,
+            inject: function () {
+              return injectedProps
             },
-            SidebarDeckEntry,
-          )
-        })
-      }, 'agent-master: 左栏入口')
+          },
+          SidebarDeckEntry,
+        )
+      })
     }
 
     /** 降级路径：右栏不可用时挂到 shell.overlay（root 作用域，没有 useProjection）。 */
@@ -1184,6 +1213,7 @@ window.__ModuleLoader__.load({
     exports.chatAddress = chatAddress
     exports.toneColors = TONE_COLORS
     exports.deckBadge = deckBadge
+    exports.formatTime = formatTime
     exports.openDeckTab = openDeckTab
     exports.deckRelativePath = deckRelativePath
     exports.parseDeckText = parseDeckText

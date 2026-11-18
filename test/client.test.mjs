@@ -388,3 +388,44 @@ test('client：remote.workspaceFiles 访问抛错时不打断面板（真机回�
   dispose()
   assert.deepEqual(seen, [], '拿不到 Remote 时不该收到数据（靠轮询回退，不伪造数据）')
 })
+
+test('client：四个座位都挂上（面板 / 标签标题 / 计数胶囊 / 左栏入口）', () => {
+  const seats = []
+  const ctx = makeClientCtx({ seats })
+  client.apply(ctx)
+  const names = seats.map((seat) => seat.options.name)
+  for (const expected of [
+    'sidebar.right.pane.tab',
+    'sidebar.right.pane.tab.title',
+    'conversation.input.left',
+    'sidebar.footer.action',
+  ]) {
+    assert.ok(names.includes(expected), '缺座位 ' + expected + '，实际有 ' + JSON.stringify(names))
+  }
+})
+
+test('client：单个座位注册抛错不许拖垮其它座位（真机回归：一个 slot 冲突废掉整组）', () => {
+  const seats = []
+  const ctx = makeClientCtx({ seats })
+  const register = ctx.slots.register
+  ctx.slots.register = function patched(options, Component) {
+    // 复刻宿主单占位槽位的真实报错：已有注册时 register 直接抛
+    if (options && options.name === 'conversation.input.left') {
+      throw new Error('single slot "conversation.input.left" already has a registration at priority 0')
+    }
+    return register.call(this, options, Component)
+  }
+  client.apply(ctx) // 整体装配不许抛
+  const names = seats.map((seat) => seat.options.name)
+  assert.ok(names.includes('sidebar.right.pane.tab'), '面板座位必须还在')
+  assert.ok(names.includes('sidebar.footer.action'), '左栏入口必须还在')
+  assert.ok(!names.includes('conversation.input.left'), '抛错的座位自己跳过即可')
+})
+
+test('client：时间戳格式与 locale 无关（真机回归：显示成 19/11/2026 上午12:45:08）', () => {
+  const at = new Date(2026, 10, 19, 0, 45, 0).getTime() // 本地时区 2026-11-19 00:45
+  assert.equal(client.formatTime(at), '2026-11-19 00:45')
+  assert.equal(client.formatTime(0), '', '0 视为缺失，不显示 1970')
+  assert.equal(client.formatTime('不是时间'), '')
+  assert.equal(client.formatTime(undefined), '')
+})
