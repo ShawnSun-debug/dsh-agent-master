@@ -143,10 +143,11 @@ test('配置：childToolExtras 允许空数组（表示不补），null 仍表�
 test('配置：dshHome 优先 DSH_HOME，其次 USERPROFILE，最后退 homedir()', () => {
   assert.equal(dshHome({ DSH_HOME: 'D:/dsh-home', USERPROFILE: 'C:/Users/me' }), 'D:/dsh-home')
   // 空串不算设置过
-  assert.equal(dshHome({ DSH_HOME: '', USERPROFILE: 'C:/Users/me' }), 'C:/Users/me')
-  assert.equal(dshHome({ USERPROFILE: 'C:/Users/me' }), 'C:/Users/me')
-  assert.equal(dshHome({ USERPROFILE: '' }), homedir())
-  assert.equal(dshHome({}), homedir())
+  // DSH_HOME 就是 .dsh 目录本身，退回 USERPROFILE/homedir 时必须补一层 .dsh
+  assert.equal(dshHome({ DSH_HOME: '', USERPROFILE: 'C:/Users/me' }), join('C:/Users/me', '.dsh'))
+  assert.equal(dshHome({ USERPROFILE: 'C:/Users/me' }), join('C:/Users/me', '.dsh'))
+  assert.equal(dshHome({ USERPROFILE: '' }), join(homedir(), '.dsh'))
+  assert.equal(dshHome({}), join(homedir(), '.dsh'))
   assert.equal(typeof dshHome(), 'string')
 })
 
@@ -160,8 +161,17 @@ test('配置：dataRoot 默认落 DSH_HOME/agent-master，dataDir 覆盖并绝�
   assert.equal(relativeRoot, resolve('rel-data'))
   assert.equal(isAbsolute(relativeRoot), true)
 
-  // 没有 DSH_HOME 时 USERPROFILE 决定默认位置
-  assert.equal(dataRoot(config, { USERPROFILE: 'D:/users/me' }), resolve(join('D:/users/me', 'agent-master')))
+  // 没有 DSH_HOME 时 USERPROFILE/.dsh 决定默认位置（与 verify-restart.mjs 同一约定）
+  assert.equal(dataRoot(config, { USERPROFILE: 'D:/users/me' }), resolve(join('D:/users/me', '.dsh', 'agent-master')))
+})
+
+test('配置：进程里没有 DSH_HOME 时（桌面应用真机形态）数据根仍落在 ~/.dsh/agent-master', () => {
+  const config = validateConfig()
+  // 桌面应用主进程只有 USERPROFILE（DSH_HOME 只给 shell 子进程），旧实现据此写出
+  // C:\Users\charl\agent-master，与体检脚本查的 ~/.dsh/agent-master 分叉。
+  const root = dataRoot(config, { USERPROFILE: 'C:\\Users\\charl' })
+  assert.equal(root, resolve(join('C:\\Users\\charl', '.dsh', 'agent-master')))
+  assert.notEqual(root, resolve(join('C:\\Users\\charl', 'agent-master')), '绝不能落到 USERPROFILE 下的裸 agent-master')
 })
 
 test('配置：sanitizeRootId 净化路径穿越与非法字符，空值报错', () => {

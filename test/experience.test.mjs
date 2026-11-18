@@ -112,8 +112,9 @@ test('experience：读取时两级合并，同 title 项目级内容优先', asy
 })
 
 test('experience：globalExperienceDir 跟随 USERPROFILE / DSH_HOME', async () => {
-  assert.equal(globalExperienceDir({ USERPROFILE: 'C:\\Users\\x' }).endsWith(join('.dsh', 'agent-master')), true)
-  assert.equal(globalExperienceDir({ USERPROFILE: 'C:\\Users\\x', DSH_HOME: 'D:\\home' }).startsWith('D:\\home'), true)
+  assert.equal(globalExperienceDir({ USERPROFILE: 'C:\\Users\\x' }), join('C:\\Users\\x', '.dsh', 'agent-master'))
+  // DSH_HOME 已经是 .dsh 目录，不能再补一层（否则与看板数据根分叉）
+  assert.equal(globalExperienceDir({ USERPROFILE: 'C:\\Users\\x', DSH_HOME: 'D:\\home' }), join('D:\\home', 'agent-master'))
 })
 
 // ---------------------------------------------------------------------------

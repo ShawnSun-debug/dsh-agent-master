@@ -1,7 +1,8 @@
 # HANDOFF — dsh-agent-master
 
 > 一条 master 对话指挥 N 路子对话；共享看板（`board.json`）是唯一事实来源。
-> **T09–T13 五票已全部落地，272 例测试全绿；工具层已在真宿主（headless + 真模型）跑通全链路。**
+> **T09–T13 五票已全部落地，279 例测试全绿；工具层已在真宿主（headless + 真模型）跑通全链路。**
+> **2026-11-18 又修了三个真机故障（数据根少 `.dsh`、经验库目录钉死、`startActivation` 缺 `signal`）——见 `PROGRESS.md` §5.3–5.5，都必须重启后才生效。**
 > 剩下只有 GUI 侧三条人工勾选，不是写码。
 
 ## 0. 60 秒上手（按顺序读）
@@ -17,7 +18,7 @@
 | 项 | 值 |
 |---|---|
 | 票 | T09 / T10 / T11 / T12 / T13 **全部完成** |
-| 测试 | 19 个文件 / 272 例，全绿（`node scripts/test.mjs`） |
+| 测试 | 19 个文件 / 279 例，全绿（`node scripts/test.mjs`） |
 | 真机 | 工具层全链路 + Master 会话引导（真宿主建会话、置顶、`masters/*.json` 落盘）已验证；审批 fail-closed 已验证（`PROGRESS.md` §3.5） |
 | 未验证 | 3 条 **GUI 侧**，见 `PROGRESS.md` §4 与 `docs/e2e-checklist.md` |
 | 插件 | 已装进 desktop profile（`link:` 指向本仓库，改代码重启即生效） |
@@ -94,6 +95,9 @@
     & "<同一个 node>" test/board.test.mjs
 
 ## 7. 下一个动作
+
+0. **（2026-11-18 遗留）重启后先验这三条**：① `master_experience op=list` 能看到 `<工作区>/.agent-master/experience.jsonl` 里的条目（>=1）；② `master_digest` 的 locator 落在 `~/.dsh/agent-master/…` 而不是 `~/agent-master/…`；③ 派发时点批准后**真的起得来子对话**（此前必报 `throwIfAborted`）。三条都对上才算这次修完。
+   旧数据（`C:\Users\charl\agent-master`）是修复前写错的目录，需要的话手工搬到 `~/.dsh/agent-master`；插件不会自动迁移。
 
 1. **重启 DSH**（会结束当前会话，必须由用户操作；新代码只在重启后生效）。
 2. 重启后先跑 `node scripts/verify-restart.mjs`：`masters/*.json` 出现 = Master 会话引导成功；若仍是 ❌，用 `DSH_AGENT_MASTER_DEBUG=1` 重启一次看 stderr 里的 `[agent-master] master:` 诊断。

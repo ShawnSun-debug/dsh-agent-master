@@ -7,7 +7,7 @@
 ## 1. 现在在哪
 
 - **T09–T13 五票全部落地**（看板为核心的重定向）：看板数据层、旧看板迁移、门禁与派发审批、经验沉淀、指挥台 deck v2。
-- 测试：19 个文件 / **272 例全绿**。入口 `node scripts/test.mjs`（本机 `%TEMP%` 对沙箱进程不可写，脚本把 TEMP 指到仓内 `.test-tmp`；`node --test` 在 confined 模式下会因管道 spawn 报 EPERM，故改成逐文件 `node <file>`）。
+- 测试：19 个文件 / **279 例全绿**。入口 `node scripts/test.mjs`（本机 `%TEMP%` 对沙箱进程不可写，脚本把 TEMP 指到仓内 `.test-tmp`；`node --test` 在 confined 模式下会因管道 spawn 报 EPERM，故改成逐文件 `node <file>`）。
 - 源码：`lib/{config,board,migrate,ledger,handoff,gate,approval,experience,tools,sections,deck,sources,dispatch,master,index}.js` + `client/client.js`。
 - 契约：`docs/GLOSSARY.md`（术语）、`docs/adr/0001–0004`（不可逆决策）、`.scratch/api-notes.md`（宿主 API 行号证据）、`issues/00-wayfinder-map.md`（地图）。
 - 落盘：`<dataDir>/<rootId>/{board.json,ledger.jsonl,artifacts/}`；指挥台 `<root cwd>/.agent-master/<rootId>/deck.json`；经验 `<root cwd>/.agent-master/experience.jsonl` + `~/.dsh/agent-master/experience.jsonl`。
@@ -115,6 +115,31 @@
 - 数据修复：备份后仅给那 4 条事件补 `"ignorable":true`，其余 7850 条逐字节一致；`validateStoredEvents` 复验 `PASS events=7853`。
 - 插件修复：数据通道改为**工作区文件快照 + 官方 `workspaceFiles` Remote**，一次都不再写自定义事件（`test/client.test.mjs` 有源码级断言防回归）。
 
+### 5.3 数据根少一层 `.dsh`：看板/台账/产物全写错位置，体检假绿（2026-11-18）
+
+- 现象：真桌面应用里 `master_board` 查不到卡、`master_experience` 永远空；但 `scripts/verify-restart.mjs` 一片 ✅。
+- 实证：`master_digest` 的 locator 是 `C:\Users\charl\agent-master\session-…\artifacts\…`，而约定目录是 `C:\Users\charl\.dsh\agent-master\…`。该目录里还留着桌面应用自己写的 `masters/master-409b774e10c940ea.json`（cwd = profile 目录）与一块真看板。
+- 根因：`lib/config.js` 的 `dshHome()` 在 `DSH_HOME` 未设置时**直接返回 `USERPROFILE`**，没有再补 `.dsh`。而 `DSH_HOME` 只注入给 shell 子进程（`DSH_SHELL=1` 的那层），**桌面应用主进程里没有**；`pwsh` 工具里能读到它，所以肉眼很难发现两套 env 不同。
+- 为什么体检没挡住：`verify-restart.mjs` 自己按正确约定算 `~/.dsh/agent-master`，那里的数据是 headless 探针写的（探针从 shell 启动，带 `DSH_HOME`）→ 脚本看到的是旧探针产物，全 ✅。
+- 修复：`dshHome()` 退回 `USERPROFILE` / `homedir()` 时补 `.dsh`；`lib/experience.js` 的 `globalExperienceDir` 改为复用 `dshHome()`（旧实现在 `DSH_HOME` **已设置**时又补一层 `.dsh`，是同一个函数在两个方向上都错）。
+- 防回归：`test/config.test.mjs`「进程里没有 DSH_HOME 时」用例钉死 `~/.dsh/agent-master`，并断言不等于裸 `~/agent-master`。
+
+### 5.4 经验库目录在 `apply()` 时就被钉死（2026-11-18）
+
+- 现象：`master_experience op=list` 恒返回 `total: 0`，而 `<cwd>/.agent-master/experience.jsonl` 里明明有 2 条；**不报错**，只是空。`op=accept` 写的经验也进了一个没人读的目录。
+- 根因：`lib/index.js` 在 `apply()` 入口一次性 `createExperience({ projectDir: join(masterCwd(), '.agent-master') })`。真宿主此时工作区服务给的还是「默认目录」（桌面应用里是 `C:\Users\charl\.dsh\profiles\desktop`），不是会话工作区。
+- 修复：经验库改为按**调用方会话工作区**惰性建库（`dispatch()` 用 `session.header.cwd` 算 `runtime.workspaceCwd`，经工具门面 `(input, cwd)` 透传给 `ExperienceStore`）；工作区判定与 `publishDeck` 共用 `sessionCwd()`。
+- 为什么测试没挡住：假 ctx 根本没有 `get`，`masterCwd()` 在全部用例里都退回 `process.cwd()`（= 仓库根），恰好就是测试期望的目录。
+- 防回归：`test/wiring.test.mjs`「经验库按调用方会话的工作区解析」用 `ctx.get → { defaultDirectory: stale }` 复刻真宿主，断言读/写都落在会话工作区、不落 stale。
+
+### 5.5 `startActivation` 缺 `signal`：批准了也一路 spawn 不出来（2026-11-18）
+
+- 现象（真机原文，会话 `session-d7d04ed2` 第 13/14 步）：`master_dispatch` 返回 `{"ok":false,"failedAt":1,"rolledBack":["t1"]}`，`master_assign` 返回 `{"ok":false,"taskId":"t1"}`，两者 error 都是 `TypeError: Cannot read properties of undefined (reading 'throwIfAborted')`。表现为「审批卡片点了批准，但一路子对话都没起来」。
+- 根因：`lib/index.js` 的 `spawnActivationFor` 拼 payload 时没带 `signal`。宿主 `SubagentActivationSpec` 把它声明成**必填**：`dsh-subagent/src/types.ts` 里 `readonly signal: AbortSignal`（其余参数才带 `?`），宿主内部直接对 `spec.signal` 解引用。
+- 修复：每次激活建一个 `AbortController`，`signal` 带进 payload；在途 controller 记进 `spawnControllers`，`dispose()` 时统一 abort，`finally` 里摘除。
+- 为什么测试没挡住：假 ctx 的 `startActivation` 收下 payload 就返回，从不碰 `signal`；离线用例也不经过「审批 → 真 spawn」。
+- 防回归：`test/wiring.test.mjs`「startActivation 必带 signal」让假 ctx 复刻宿主契约（`payload.signal.throwIfAborted()`），并断言传进去的是真 `AbortSignal`。
+
 ## 6. 雷区（踩过的）
 
 - **不要用 `%TEMP%`**：沙箱进程 `mkdtemp` 报 EPERM，一律用仓内 `.test-tmp`（`scripts/test.mjs` 已处理）。
@@ -125,6 +150,8 @@
 - **`ctx.subagents.startActivation` 的 `parent` 必须是活 Agent 实例**（`exec.agent`），冷恢复后缓存的旧 Agent 会被判 UNAUTHORIZED → 工具集按 agent 实例 WeakMap 缓存。
 - **`tools.restrict()` 只能挂在 agent 作用域的 `agent.ctx` 上**：全局 ctx 调用直接抛错；`agent/created` 是 serial 事件，挂监听要赶在第一步之前。
 - **子对话必须预分配 `childId`**：`startActivation` 的 `agent/created` 早于它返回。
+- **`startActivation` 的 `signal` 是必填**（`dsh-subagent/src/types.ts`）：漏了就是 `throwIfAborted` of undefined，且**在审批通过之后**才炸（见 5.5）。
+- **`DSH_HOME` 只给 shell 子进程，桌面应用主进程没有**：任何依赖它的路径都要按 `dshHome()` 的兜底走，别再自己拼一套（见 5.3）。
 - **客户端是经典脚本**：`test/client.test.mjs` 用 `new Function` 执行再取 `__ModuleLoader__.load` 的工厂；假 ctx 的 `slots.inject(name, fn)` **必须真的执行 `fn`**，否则座位永远注册不上（踩过）。
 - **PowerShell 单元素管道会退化成字符串**，拼 PATH 之类必须 `@()` 强制数组。
 - 子代理**不得自行 commit**；提交由 lead 做，提交前必须全量测试绿。

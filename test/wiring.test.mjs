@@ -942,3 +942,77 @@ test('wiring：apply 登记 agents/workspaceRegistry 注入，引导出一个置
     await rm(dir, { recursive: true, force: true })
   }
 })
+
+test('wiring：经验库按调用方会话的工作区解析，不在 apply() 时把目录钉死（真宿主回归）', async () => {
+  const workspace = await makeTempDir()
+  const stale = await makeTempDir()
+  try {
+    // 工作区里预置一条经验：它就是真机上 op=list 应该看得见的那条
+    await mkdir(join(workspace, '.agent-master'), { recursive: true })
+    await writeFile(
+      join(workspace, '.agent-master', 'experience.jsonl'),
+      JSON.stringify({
+        op: 'save',
+        titleKey: 'workspace-only',
+        title: '工作区经验',
+        lesson: '必须看得见',
+        root_cause: '',
+        fix: '',
+        tags: [],
+        scope: 'project',
+        sourceCardId: '',
+        ts: 1,
+      }) + '\n',
+      'utf8',
+    )
+
+    const { ctx, calls } = fakeCtx()
+    // 真宿主里 apply() 执行时，工作区服务给出的还不是会话工作区（这里用 stale 复刻）。
+    // 早算一次目录，之后所有读写就都落在 stale，且**不报错**——只表现为经验库永远是空的。
+    ctx.get = (name) => (name === 'workingDirectory' ? { defaultDirectory: stale } : undefined)
+    await apply(ctx, { dataDir: join(stale, 'data') })
+
+    const agent = makeAgent('session-root', workspace)
+    const listed = await findTool(calls, 'master_experience').execute({ op: 'list' }, { agent })
+    assert.equal(listed.total, 1, '经验库必须按调用方会话的工作区解析，不能用 apply() 时的默认目录')
+    assert.equal(listed.items[0].titleKey, 'workspace-only')
+
+    // 写也必须落在同一个工作区：否则「验收写经验」会写进没人读的目录
+    const saved = await findTool(calls, 'master_experience').execute(
+      { op: 'save', title: '新的教训', lesson: '写也要落工作区' },
+      { agent },
+    )
+    assert.equal(saved.action, 'created')
+    const after = await findTool(calls, 'master_experience').execute({ op: 'list' }, { agent })
+    assert.equal(after.total, 2, '写和读必须是同一个目录')
+    assert.equal(existsSync(join(stale, '.agent-master', 'experience.jsonl')), false, '不该再往 apply() 时的目录写')
+  } finally {
+    await rm(workspace, { recursive: true, force: true })
+    await rm(stale, { recursive: true, force: true })
+  }
+})
+
+test('wiring：startActivation 必带 signal（真机回归：宿主对 undefined 调 throwIfAborted 直接炸）', async () => {
+  const dir = await makeTempDir()
+  try {
+    const { ctx, calls } = fakeCtx({ rootOf: (agent) => agent })
+    // 复刻宿主契约：signal 是必填参数，undefined 会在宿主第一行抛 TypeError
+    // （真机原文：Cannot read properties of undefined (reading 'throwIfAborted')）
+    ctx.subagents.startActivation = async (payload) => {
+      payload.signal.throwIfAborted()
+      calls.activations.push(payload)
+      return { childId: payload.childId, name: payload.name ?? 'child' }
+    }
+    const agent = makeAgent('root-1', dir)
+    await apply(ctx, { dataDir: dir })
+
+    const assigned = await findTool(calls, 'master_assign').execute(
+      { label: 'A', brief: { goal: '任务一' } },
+      { agent },
+    )
+    assert.equal(assigned.taskId, 't1')
+    assert.ok(calls.activations[0].signal instanceof AbortSignal, '必须把真实 AbortSignal 交给宿主')
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
