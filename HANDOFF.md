@@ -3,7 +3,7 @@
 > 一条 master 对话指挥 N 路子对话；共享看板（`board.json`）是唯一事实来源。
 > **T09–T13 五票已全部落地，280 例测试全绿；工具层已在真宿主（headless + 真模型）跑通全链路。**
 > **2026-11-18 修了五个真机故障（数据根少 `.dsh`、经验库目录钉死、`startActivation` 缺 `signal`、`assign` 返回宿主句柄、指挥台空白=缺 `remote.workspaceFiles` 注入）——见 `PROGRESS.md` §5.3–5.7，都要重新加载插件才生效。**
-> **指挥台空白已用真浏览器锁定并修好**：新增 `npm run test:e2e`（`scripts/e2e-probe.mjs`），在独立 profile 里起宿主 + 无头 Edge，断言入口出现／点击／面板渲染正文／控制台零错误。**改客户端不用重启桌面端，刷新页面即可；改服务端才要重启。**
+> **指挥台空白已用真浏览器锁定并修好**：新增 `npm run test:e2e`（`scripts/e2e-probe.mjs`），在独立 profile 里起宿主 + 无头 Edge，断言入口出现／点击／面板渲染正文／控制台零错误。**改客户端不用重启桌面端，刷新页面即可（2026-11-19 实测：改 client.js → 仅 `Page.reload` → 新文案出现）；改服务端（lib/）才要重启。**
 > 重启后已验证：经验库 2→3 条可读、产物落 `~/.dsh/agent-master`、`master_assign` 真 spawn 出 `smoke-a` 并回报（`name=dsh-agent-master`/`version=0.1.0`）、`op=accept` 把 `t1` 置 done(rev 6)。
 > 剩下只有 GUI 侧三条人工勾选，不是写码。
 
