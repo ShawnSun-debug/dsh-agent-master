@@ -474,6 +474,8 @@ async function main() {
     // 要么说清怎么开一路（已绑会话）。这正是「打开一片空白、不知道有什么意思」的来源。
     check('空态给出可执行的下一步', text.includes('还没绑定会话') || text.includes('还没有下派任何子对话'), JSON.stringify(text).slice(0, 220))
     check('面板有可读空状态文案', text.includes('指挥台') && (text.includes('还没有下派') || text.includes('看板')), JSON.stringify(text).slice(0, 200))
+    const emptyShot = await screenshot(page, join(TMP, 'deck-empty.png'))
+    if (emptyShot !== null) log('  空态截图：' + emptyShot)
     check('控制台没有错误', page.logs.length === 0, page.logs.slice(0, 3).join(' | '))
 
     if (WITH_DATA) {

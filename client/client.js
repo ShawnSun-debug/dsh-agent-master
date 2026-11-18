@@ -591,28 +591,38 @@ window.__ModuleLoader__.load({
       footerButton: {
         display: 'inline-flex',
         alignItems: 'center',
-        gap: '6px',
-        padding: '4px 8px',
-        borderRadius: '6px',
-        border: '1px solid ' + TOKENS.line,
+        gap: '8px',
+        padding: '6px 8px',
+        borderRadius: TOKENS.radiusSm,
+        border: '1px solid transparent',
         background: 'transparent',
-        color: 'inherit',
+        color: TOKENS.textSecondary,
         cursor: 'pointer',
-        fontSize: '12px',
+        font: 'inherit',
+        fontSize: '13px',
+        lineHeight: '18px',
+        transition: TOKENS.motion,
       },
+      footerHover: { background: TOKENS.hover, color: TOKENS.text },
       pill: {
         display: 'inline-flex',
         alignItems: 'center',
-        gap: '4px',
-        padding: '2px 8px',
+        gap: '5px',
+        padding: '2px 7px',
         borderRadius: '999px',
-        border: '1px solid ' + TOKENS.line,
+        border: '1px solid transparent',
         background: 'transparent',
-        color: 'inherit',
+        color: TOKENS.textSecondary,
         cursor: 'pointer',
+        font: 'inherit',
         fontSize: '11px',
+        lineHeight: '16px',
         whiteSpace: 'nowrap',
+        transition: TOKENS.motion,
       },
+      pillHover: { background: TOKENS.hover, color: TOKENS.text },
+      pillDanger: { background: TOKENS.dangerSoft, color: TONE_COLORS.danger },
+      pillSuccess: { background: TONE_TINTS.success, color: TONE_COLORS.success },
     }
 
     /** createElement 的薄包装：子节点走可变参数，读起来比嵌套数组清楚。 */
@@ -1098,19 +1108,35 @@ window.__ModuleLoader__.load({
      * props 来自 session 作用域 seat：sessionId 与 useProjection；openChild 由本插件在
      * stage2 的 inject 里注入（点击卡片时用它按官方寻址打开子会话 tab）。
      */
-    /** 左栏底部入口：root 作用域没有投影，所以只负责「进得去」。 */
+    /** 看板小图标（三条不同高度的圆角柱），跟着 `currentColor` 变色。 */
+    function DeckGlyph() {
+      return h(
+        'svg',
+        { width: 14, height: 14, viewBox: '0 0 14 14', fill: 'none', 'aria-hidden': 'true' },
+        h('rect', { x: 1.5, y: 2.5, width: 3, height: 9, rx: 1, fill: 'currentColor', opacity: 0.9 }),
+        h('rect', { x: 5.75, y: 2.5, width: 3, height: 5.5, rx: 1, fill: 'currentColor', opacity: 0.55 }),
+        h('rect', { x: 10, y: 2.5, width: 3, height: 7, rx: 1, fill: 'currentColor', opacity: 0.75 }),
+      )
+    }
+
+    /** 左栏底部入口：root 作用域没有投影，所以只负责「进得去」；样式对齐宿主底部行。 */
     function SidebarDeckEntry(props) {
+      var pair = useInteractive(STYLES.footerButton, STYLES.footerHover, STYLES.focusRing)
       return h(
         'button',
-        {
-          type: 'button',
-          title: DECK_TITLE,
-          'data-agent-master': 'deck-entry',
-          style: STYLES.footerButton,
-          onClick: function () {
-            if (props && typeof props.openDeck === 'function') props.openDeck()
+        Object.assign(
+          {
+            type: 'button',
+            title: DECK_TITLE,
+            'data-agent-master': 'deck-entry',
+            style: pair[0],
+            onClick: function () {
+              if (props && typeof props.openDeck === 'function') props.openDeck()
+            },
           },
-        },
+          pair[1],
+        ),
+        h(DeckGlyph, null),
         DECK_TITLE,
       )
     }
@@ -1118,21 +1144,26 @@ window.__ModuleLoader__.load({
     /** 会话头胶囊：session 作用域，能显示「还没回报/总数」（快照优先，投影回退）。 */
     function HeaderDeckPill(props) {
       var badge = deckBadge(useDeckState(props))
-      var style = STYLES.pill
-      if (badge.tone === 'danger' || badge.tone === 'success') {
-        style = Object.assign({}, style, { color: TONE_COLORS[badge.tone] })
-      }
+      var base = Object.assign(
+        {},
+        STYLES.pill,
+        badge.tone === 'danger' ? STYLES.pillDanger : badge.tone === 'success' ? STYLES.pillSuccess : null,
+      )
+      var pair = useInteractive(base, STYLES.pillHover, STYLES.focusRing)
       return h(
         'button',
-        {
-          type: 'button',
-          title: deckBadgeTitle(badge),
-          'data-agent-master': 'deck-pill',
-          style: style,
-          onClick: function () {
-            if (props && typeof props.openDeck === 'function') props.openDeck()
+        Object.assign(
+          {
+            type: 'button',
+            title: deckBadgeTitle(badge),
+            'data-agent-master': 'deck-pill',
+            style: pair[0],
+            onClick: function () {
+              if (props && typeof props.openDeck === 'function') props.openDeck()
+            },
           },
-        },
+          pair[1],
+        ),
         badge.text,
       )
     }
