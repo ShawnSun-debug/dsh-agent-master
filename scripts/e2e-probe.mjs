@@ -356,6 +356,9 @@ async function main() {
     const parsed = JSON.parse(panel || '{}')
     const text = (parsed.nodes && parsed.nodes[0]) || ''
     check('面板真渲染出正文（不再空白）', text.length > 0, JSON.stringify(text).slice(0, 200))
+    // 空态必须是「可执行的下一步」：要么指路到会话里的入口（没绑会话），
+    // 要么说清怎么开一路（已绑会话）。这正是「打开一片空白、不知道有什么意思」的来源。
+    check('空态给出可执行的下一步', text.includes('还没绑定会话') || text.includes('还没有下派任何子对话'), JSON.stringify(text).slice(0, 220))
     check('面板有可读空状态文案', text.includes('指挥台') && (text.includes('还没有下派') || text.includes('看板')), JSON.stringify(text).slice(0, 200))
     check('控制台没有错误', page.logs.length === 0, page.logs.slice(0, 3).join(' | '))
 

@@ -429,3 +429,19 @@ test('client：时间戳格式与 locale 无关（真机回归：显示成 19/11
   assert.equal(client.formatTime('不是时间'), '')
   assert.equal(client.formatTime(undefined), '')
 })
+test('client：root 作用域页签（没有 sessionId）要说清怎么打开本会话看板', () => {
+  const panel = findComponent('DeckPanel')
+  const element = panel({ useProjection: () => null })
+  const json = JSON.stringify(element)
+  assert.ok(json.includes('还没绑定会话'), '必须指路，不能只说没有记录：' + json.slice(0, 300))
+  assert.ok(json.includes('输入框左侧'), '要说清去哪儿点：' + json.slice(0, 300))
+  assert.equal(element.props['data-deck-bound'], 'no')
+})
+
+test('client：绑定会话的空态仍用「还没有下派」那套文案', () => {
+  const panel = findComponent('DeckPanel')
+  const element = panel({ sessionId: 's1', useProjection: () => null })
+  const json = JSON.stringify(element)
+  assert.ok(json.includes('还没有下派任何子对话'), json.slice(0, 300))
+  assert.equal(element.props['data-deck-bound'], 'yes')
+})

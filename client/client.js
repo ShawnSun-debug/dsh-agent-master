@@ -52,6 +52,9 @@ window.__ModuleLoader__.load({
     var DECK_TITLE = '指挥台'
     /** 空态文案（票面逐字要求）。 */
     var EMPTY_TEXT = '还没有下派任何子对话 —— 在主对话里用 master_dispatch / master_assign 开一路'
+    // 从左栏入口打开的是 root 作用域页签，拿不到会话号：这时候说「没有记录」等于没说，
+    // 得告诉用户下一步点哪儿（真机反馈：打开一片空白，不知道这面板是干什么的）。
+    var UNBOUND_TEXT = '这个页签还没绑定会话 —— 在会话里点输入框左侧的「指挥台 N/M」看那个会话的看板'
     /** 最近记录最多显示的条数。 */
     var RECENT_LIMIT = 12
     /** 官方子对话 tab 的地址前缀（dsh-client-ui-subagent/src/client/sidebar-chat/index.tsx:21）。 */
@@ -871,11 +874,13 @@ window.__ModuleLoader__.load({
       var model = viewModel(state)
 
       if (model.empty) {
+        // 绑了会话才谈得上「下派」；没绑会话先指路，否则用户只看到一句无从下手的话。
+        var bound = props && typeof props.sessionId === 'string' && props.sessionId !== ''
         return h(
           'div',
-          { style: STYLES.root, 'data-agent-master': 'deck' },
+          { style: STYLES.root, 'data-agent-master': 'deck', 'data-deck-bound': bound ? 'yes' : 'no' },
           h(DeckHeader, { model: model }),
-          h('div', { style: STYLES.empty }, model.emptyText),
+          h('div', { style: STYLES.empty }, bound ? model.emptyText : UNBOUND_TEXT),
         )
       }
 
@@ -1226,6 +1231,7 @@ window.__ModuleLoader__.load({
       DECK_DIR_NAME: DECK_DIR_NAME,
       DECK_FILE_NAME: DECK_FILE_NAME,
       EMPTY_TEXT: EMPTY_TEXT,
+      UNBOUND_TEXT: UNBOUND_TEXT,
       RECENT_LIMIT: RECENT_LIMIT,
       DECK_VERSION: DECK_VERSION,
       DECK_TITLE: DECK_TITLE,
