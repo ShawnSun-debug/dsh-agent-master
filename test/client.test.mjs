@@ -364,3 +364,27 @@ test('client：不写任何自定义会话事件（只读快照 + workspaceFiles
   assert.match(source, /workspaceFiles/)
   assert.match(source, /deck\.json/)
 })
+
+test('client：inject 必须声明 remote / remote.workspaceFiles（真机回归：不声明则面板整片空白）', () => {
+  // 宿主 ctx 是服务代理，未声明的服务一访问就抛 without inject；
+  // 而且这套 Loader 只认**纯数组**（对象形态会被当成服务名逐个等待，插件永远 pending）。
+  assert.ok(Array.isArray(client.inject), 'inject 必须是纯数组')
+  for (const name of ['slots', 'sidebarRightTabs', 'locale', 'sessions', 'remote', 'remote.workspaceFiles']) {
+    assert.ok(client.inject.includes(name), 'inject 缺 ' + name)
+  }
+})
+
+test('client：remote.workspaceFiles 访问抛错时不打断面板（真机回归：空白页）', async () => {
+  const hostile = {
+    get workspaceFiles() {
+      throw new Error('cannot get property "remote.workspaceFiles" without inject')
+    },
+  }
+  // 订阅：不许抛到调用方（组件 effect 里抛错会整片空白），并且立刻能 dispose
+  const seen = []
+  const dispose = client.subscribeDeck(hostile, 'session-a', (value) => seen.push(value))
+  assert.equal(typeof dispose, 'function', '订阅必须返回 disposer')
+  await delay(20)
+  dispose()
+  assert.deepEqual(seen, [], '拿不到 Remote 时不该收到数据（靠轮询回退，不伪造数据）')
+})

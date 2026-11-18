@@ -636,18 +636,36 @@ window.__ModuleLoader__.load({
     }
 
     /**
+     * 取 `remote.workspaceFiles` 命名空间；取不到返回 null。
+     *
+     * 真机踩过（指挥台一开就是空白）：宿主 ctx 是**服务代理**，没在 inject 里
+     * 声明的服务一碰就抛 `cannot get property "remote.workspaceFiles" without inject`。
+     * 这个抛错发生在 effect 里会直接把面板打成空白，所以这里一律收敛成 null 走回退。
+     */
+    function workspaceFilesOf(remote) {
+      if (!remote) return null
+      try {
+        var files = remote.workspaceFiles
+        return files && typeof files === 'object' ? files : null
+      } catch (error) {
+        return null
+      }
+    }
+
+    /**
      * 读一次快照：官方 workspaceFiles.read（路径相对会话工作区根）。
      * 读不到（还没有文件 / 老宿主没有 Remote）返回 null，由调用方回退投影。
      */
     function readDeckFile(remote, sessionId, signal) {
-      if (!remote || !remote.workspaceFiles || typeof remote.workspaceFiles.read !== 'function') {
+      var files = workspaceFilesOf(remote)
+      if (files === null || typeof files.read !== 'function') {
         return Promise.resolve(null)
       }
       var id = sanitizeSessionId(sessionId)
       if (id === '') return Promise.resolve(null)
       var pending
       try {
-        pending = remote.workspaceFiles.read(id, deckRelativePath(id), {}, signal)
+        pending = files.read(id, deckRelativePath(id), {}, signal)
       } catch (error) {
         return Promise.resolve(null)
       }
@@ -725,13 +743,19 @@ window.__ModuleLoader__.load({
       }
 
       readOnce()
-      if (id !== '' && remote && typeof remote.$stream === 'function'
-        && remote.workspaceFiles && typeof remote.workspaceFiles.changes === 'function') {
+      var files = workspaceFilesOf(remote)
+      var streamFactory = null
+      try {
+        streamFactory = remote && typeof remote.$stream === 'function' ? remote.$stream : null
+      } catch (error) {
+        streamFactory = null
+      }
+      if (id !== '' && streamFactory !== null && files !== null && typeof files.changes === 'function') {
         try {
-          var stream = remote.$stream({
+          var stream = streamFactory({
             name: 'agent-master deck ' + id,
             open: function (lifetime) {
-              return remote.workspaceFiles.changes(id, deckRelativePath(id), lifetime)
+              return files.changes(id, deckRelativePath(id), lifetime)
             },
             ended: function () {
               return new Error('agent-master deck watch ended')
@@ -1145,7 +1169,11 @@ window.__ModuleLoader__.load({
     }
 
     exports.name = PLUGIN_NAME
-    exports.inject = ['slots', 'sidebarRightTabs', 'locale', 'sessions']
+    // remote / remote.workspaceFiles 必须声明：宿主 ctx 是服务代理，未注入的服务
+    // 一访问就抛 `without inject`（真机踩过，面板因此整片空白）。
+    // 只能写**纯数组**：这套宿主的 Loader 把对象形态的键当成服务名逐个等待
+    // （实测 inject={required,optional} 会让插件永远 pending）。
+    exports.inject = ['slots', 'sidebarRightTabs', 'locale', 'sessions', 'remote', 'remote.workspaceFiles']
     exports.apply = apply
     // 纯函数导出：test/client.test.mjs 通过经典脚本路径读到同一份实现。
     exports.viewModel = viewModel

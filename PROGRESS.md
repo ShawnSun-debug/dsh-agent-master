@@ -147,9 +147,25 @@
 - 修复：新增 `childHandle()` 投影，只保留 `childId / name / messageId` 三个字符串字段。
 - 防回归：`test/wiring.test.mjs`「master_assign 的返回值必须是 lossless JSON」让假 ctx 返回带 Promise/dispose 的真形状句柄，并递归断言返回值无函数、无 undefined、无循环；同时把旧断言 `result.child` 改成投影形状（`messageId: null`）。
 
+### 5.7 指挥台一打开整片空白：客户端没声明 `remote.workspaceFiles` 注入（2026-11-18）
+
+- 现象：桌面端点开「指挥台」，面板**什么都没有**（不是空状态文案，是整块空白）。
+- 取证：独立 profile（`probe-ui`）+ 无头 Edge + CDP，点入口后抓控制台，拿到原文
+  `Error: cannot get property "remote.workspaceFiles" without inject`，栈顶是 `readDeckFile (client/client.js:707)`。
+- 根因：宿主给客户端的 `ctx` 是**服务代理**，没写进 `exports.inject` 的服务一访问就抛错。
+  这个抛错发生在组件 effect 里，React 直接把面板打成空白；而 `readDeckFile` 里那次属性访问在 try 之外，兜不住。
+- 顺带踩到第二个坑：`inject` 写成 `{ required, optional }` 对象形态时，这套 Loader 把**键名当服务名**逐个等待，
+  插件永远 `pending (waiting for services: required, optional)`，连入口都不出现 —— 只认**纯数组**。
+- 修复：`exports.inject = ['slots','sidebarRightTabs','locale','sessions','remote','remote.workspaceFiles']`；
+  新增 `workspaceFilesOf()` 把命名空间访问收敛成 null，读与订阅（含 `$stream`）全部走它，拿不到就回退轮询。
+- 防回归：`test/client.test.mjs` 两条（inject 必须含 remote 两项 + 敌意 remote 不许抛）；
+  以及新脚本 `scripts/e2e-probe.mjs`（`npm run test:e2e`）在**独立 profile** 里用真浏览器验收：入口出现 → 点击 → 面板渲染正文 → 控制台零错误。
+
 ## 6. 雷区（踩过的）
 
 - **不要用 `%TEMP%`**：沙箱进程 `mkdtemp` 报 EPERM，一律用仓内 `.test-tmp`（`scripts/test.mjs` 已处理）。
+- **客户端插件必须把用到的每个服务写进 `exports.inject`（纯数组）**：漏一个，取用即抛 `without inject`，
+  而抛在 effect 里就是整片空白；写成对象形态会让插件永远 pending（见 5.7）。
 - **三方插件不能写自定义会话事件**（见 5.2）。投影 `agentMaster` 只作为旧会话回退。
 - **`board.getCard(id)` 返回 `{card, records}`**，不是卡本身；存储层卡片的标题字段是 `title`（`label` 是 deck 的展示字段）。
 - **`master_board op=accept` 必须带 `verdict`（accept/rework/abort）**，且 `accept` 必须给 `experience` 或显式 `experienceNone:true` —— 静默跳过沉淀会被当场拒绝。
