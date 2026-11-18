@@ -28,7 +28,8 @@ node scripts/verify-restart.mjs        # 加 --json 可机读
 - [x] 七个工具真的注册进宿主，模型能调用（此前必崩，见 §3.5 的 5 个真机 bug）
 - [x] `master_board`：`head` / `query` / `records` / `create` / `claim` / `doing` / `accept` 全部正常返回
 - [x] `master_report final:true` → 卡进 `review`；`op=accept verdict=accept + experience` → 卡 `done` 且经验落盘
-- [x] `master_assign` 在**没有审批服务**的宿主里 fail-closed：报「审批通道不可用」、零建卡零 spawn
+- [x] `master_assign` 在**没有审批服务**的宿主里 fail-closed：报「审批通道不可用」、看板零新增卡、零 spawn
+- [x] Master 会话引导：真宿主里 `created:true pinned:true`，记录写进 `~/.dsh/agent-master/masters/*.json`
 - [x] 落盘证据：`~/.dsh/agent-master/<rootId>/board.json`、`<cwd>/.agent-master/<rootId>/deck.json`（v2）、
       `<cwd>/.agent-master/experience.jsonl`
 

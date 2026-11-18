@@ -59,19 +59,22 @@
 - `op=accept verdict=accept + experience` → `卡 t1（done，rev 5）`，卡置 done，经验写进 `<cwd>/.agent-master/experience.jsonl`（`sourceCardId: t1`）。
 - `master_assign` → **fail-closed 生效**：`Error: 审批通道不可用（outcome=unavailable）`，看板零新增卡、零 spawn。
 - 指挥台数据源：`.agent-master/<rootId>/deck.json` 为 v2 快照，含真实卡（`label/status/rev/assignee/counts`）。
+- **Master 会话引导**（同一套 24 bundle 的 web 宿主）：`master 会话就绪 session-ae333ef4… created:true pinned:true`，
+  记录写进 `~/.dsh/agent-master/masters/master-3ed5bf5e….json`；白名单按宿主真实工具表收敛（去掉了 read/write/edit/ask_user_question）。
 
 
-**master 引导专项（同一天追加，3 个问题）**：
+**master 引导专项（同一天追加，4 个问题）**：
 
 | # | 现象 | 根因 | 修复 |
 |---|---|---|---|
 | 6 | `ensureMasterSession 拿不到 agents.create`：`ctx.get("agents") = undefined` | 注入回调 `ctx.inject(['agents','workspaceRegistry'], scoped => …)` 里**异步**再去 `scoped.get(name)` 拿不到服务（回调返回后作用域失效） | 回调内**同步捕获**服务实例并显式传给 `ensureMasterSession({ agents, workspaceRegistry })` |
 | 7 | 引导静默卡死：既没报错也没有 `masters/` 记录 | 宿主 `agents.create` 可能**既不返回也不抛错**（agent 工厂未就绪时），没有超时就会永远挂着 | `withTimeout` 20s 上限，超时抛 `MasterError`，`note('master', …)` 留诊断 |
 | 8 | 真机失败后完全没线索 | 诊断只存在内存（`note()` 进数组），进程一关就没了 | `DSH_AGENT_MASTER_DEBUG=1` 时同时打到 stderr；服务形状不对时把实际拿到的对象（类型/构造名/键）写进错误 |
+| 9 | 真宿主里 `tools.restrict() names unknown global tools "read", "write", "edit", "ask_user_question"` → **Master 会话根本不出现** | 默认 master 白名单含 `read/write/edit/ask_user_question`，但该宿主组合的全局工具表里没有它们；`tools.restrict()` 一个名字不认识就整条抛错 | `restrictTools()` 解析报错里的未知名单、按宿主真实工具表收敛后重试；`parseUnknownTools()` 单测覆盖 |
 
 **重启后一键体检**：`node scripts/verify-restart.mjs`（只读，`--json` 可机读）。它检查 profile 接线、
 `plugin-operations` 里应用是否关过插件、`~/.dsh/agent-master/masters/*.json`（= Master 会话引导成功）、
-以及 deck/board/experience 三类落盘证据。当前唯一硬失败就是 `masters/` —— 必须重启后才可能出现。
+以及 deck/board/experience 三类落盘证据。修完第 9 条后，本机在 web 宿主里已全部 ✅（`masters/` 已出现）；桌面应用重启后如果 `masters/` 仍缺，说明宿主组合不同，用同上开关看诊断。
 
 **怎么复现这套真机验证**（约 10 分钟，不需要 GUI）：
 

@@ -22,6 +22,8 @@ import {
   createMasterStore,
   ensureMasterSession,
   isFactoryNotReady,
+  parseUnknownTools,
+  restrictTools,
   isMissingSessionError,
   normalizeTools,
 } from '../lib/master.js'
@@ -496,4 +498,36 @@ test('master：agents.create 永久挂起时按超时报错（真机表现为静
     // 不能真的挂住：超时后必须很快返回
     assert.ok(Date.now() - startedAt < 5000)
   })
+})
+
+test('master：parseUnknownTools 解析宿主 restrict 报错里的未知工具名', () => {
+  const message = 'tools.restrict() names unknown global tools "read", "write"; known global tools: master_board, master_assign'
+  assert.deepEqual(parseUnknownTools(message), ['read', 'write'])
+  assert.deepEqual(parseUnknownTools('tools.restrict() names unknown global tool "edit"; known global tools: x'), ['edit'])
+  assert.deepEqual(parseUnknownTools('some other error'), [])
+  assert.deepEqual(parseUnknownTools(undefined), [])
+})
+
+test('master：restrictTools 按宿主真实工具表收敛，缺名字不抛错', () => {
+  const calls = []
+  const logs = []
+  const tools = {
+    restrict(filter) {
+      calls.push([...filter.allow])
+      const unknown = filter.allow.filter((name) => !['master_assign', 'master_board'].includes(name))
+      if (unknown.length > 0) {
+        throw new Error('tools.restrict() names unknown global tools ' + unknown.map((n) => '"' + n + '"').join(', '))
+      }
+    },
+  }
+  const applied = restrictTools(tools, ['master_assign', 'master_board', 'read', 'pwsh'], (message) => logs.push(message))
+  assert.deepEqual(applied, ['master_assign', 'master_board'])
+  assert.deepEqual(calls, [['master_assign', 'master_board', 'read', 'pwsh'], ['master_assign', 'master_board']])
+  assert.equal(logs.length, 1)
+  assert.match(logs[0], /宿主没有这些全局工具/)
+})
+
+test('master：restrictTools 遇到非「未知工具」错误照原样抛，不吞掉', () => {
+  const tools = { restrict() { throw new Error('boom') } }
+  assert.throws(() => restrictTools(tools, ['read']), /boom/)
 })

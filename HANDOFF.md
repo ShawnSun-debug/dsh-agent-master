@@ -18,7 +18,7 @@
 |---|---|
 | 票 | T09 / T10 / T11 / T12 / T13 **全部完成** |
 | 测试 | 19 个文件 / 272 例，全绿（`node scripts/test.mjs`） |
-| 真机 | 工具层已验：create/claim/doing/report/accept/head/query + 审批 fail-closed（`PROGRESS.md` §3.5） |
+| 真机 | 工具层全链路 + Master 会话引导（真宿主建会话、置顶、`masters/*.json` 落盘）已验证；审批 fail-closed 已验证（`PROGRESS.md` §3.5） |
 | 未验证 | 3 条 **GUI 侧**，见 `PROGRESS.md` §4 与 `docs/e2e-checklist.md` |
 | 插件 | 已装进 desktop profile（`link:` 指向本仓库，改代码重启即生效） |
 
