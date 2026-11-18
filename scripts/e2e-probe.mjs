@@ -382,6 +382,26 @@ async function runDataScenario(page) {
   const toneSet = new Set(colors.map((item) => item.split('=')[1]))
   check('六种状态颜色互不相同（目视可辨）', colors.length === 6 && toneSet.size === 6, JSON.stringify(colors).slice(0, 240))
 
+  // 窄面板 + 超长标题：右栏本来就窄，不许横向溢出（溢出就是被裁字，等于看不见）
+  const narrow = deckFixture()
+  narrow.revision = 45
+  narrow.cards = [{
+    id: 't1',
+    label: '把这一路的调研结论、证据链、还有那些互相冲突的来源全都写清楚再说一遍',
+    status: 'doing',
+    priority: 'P1',
+    rev: 2,
+    assignee: { sessionId: 'session-cccc3333', name: 'worker-with-a-really-long-name' },
+    sessionId: 'session-cccc3333',
+    counts: { findings: 12, sources: 9, artifacts: 3, violations: 0 },
+    updatedAt: Date.now(),
+  }]
+  writeFileSync(join(deckDir, 'deck.json'), JSON.stringify(narrow, null, 2), 'utf8')
+  await page.send('Emulation.setDeviceMetricsOverride', { width: 1000, height: 800, deviceScaleFactor: 1, mobile: false })
+  await sleep(2500)
+  const overflow = await page.evaluate("(function(){ var n = document.querySelector('[data-agent-master=\"deck\"]'); return n ? (n.scrollWidth - n.clientWidth) : -1 })()")
+  check('窄面板 + 超长标题不横向溢出', typeof overflow === 'number' && overflow > -1 && overflow <= 1, 'overflow=' + String(overflow) + 'px')
+
   // 点卡片会尝试打开子会话；假会话号必然打不开，但**绝不能让面板崩掉**
   const clickedCard = await page.evaluate("(function(){ var c = document.querySelector('[data-agent-master=\"deck\"] [data-card-id]'); if (!c) return 'NO_CARD'; c.click(); return 'CLICKED' })()")
   await sleep(1200)

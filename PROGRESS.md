@@ -169,6 +169,13 @@
 - 修复：① 胶囊改挂 `conversation.input.left`（宿主实测空着、session 作用域，渲染在输入框左侧）；② 新增 `seat()` 守卫，**每个座位独立 try/catch**，失败只记警告；③ `formatTime` 不再用 `toLocaleString()`（真机显示 `19/11/2026 上午12:45:08`），改固定 `YYYY-MM-DD HH:mm`。
 - 防回归：`test/client.test.mjs` 三条（四个座位都挂上、单座位抛错不许拖垮其它、时间格式与 locale 无关）；E2E 的 `--with-data` 会把真会话 + 真 deck 快照喂进去，断言胶囊可点、卡片/状态/优先级渲染。
 
+### 5.9 为「还没选工作区」的默认目录也开了一条 Master（2026-11-19）
+
+- 现象：`~/.dsh/agent-master/masters/` 里有两条记录，其中一条 `cwd=C:\Users\<me>\.dsh\profiles\desktop` —— 那是桌面端停在「选择工作区」首页时 `workingDirectory.defaultDirectory` 的值。
+- 后果：为配置目录开出的 master，其子对话会把文件写进 `~/.dsh/profiles/desktop`；左栏还会多一条叫 Master 的会话。
+- 修复：`bootstrapMaster` 前加 `insideDshHome(cwd)` 守卫 —— cwd 落在 DSH_HOME 之内就不引导，只记一条诊断；`scripts/verify-restart.mjs` 同时把历史遗留记录标成 ⚠️ 并给出清理办法。
+- 防回归：`test/wiring.test.mjs` 用「defaultDirectory = <DSH_HOME>/profiles/desktop」复刻真宿主，断言不创建 master。
+
 ## 6. 雷区（踩过的）
 
 - **不要用 `%TEMP%`**：沙箱进程 `mkdtemp` 报 EPERM，一律用仓内 `.test-tmp`（`scripts/test.mjs` 已处理）。

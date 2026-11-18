@@ -146,17 +146,32 @@ async function checkMasterRecord() {
     return
   }
   const details = []
+  // cwd 落在 DSH_HOME 里的记录是历史遗留：为「还没选工作区」的默认目录开了一条 master。
+  // 现在有守卫不会再新增（见 lib/index.js insideDshHome），但老记录还在，要单独点名。
+  const stray = []
+  const normalize = (value) => String(value).replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
+  const home = normalize(process.env.DSH_HOME || join(homedir(), '.dsh'))
   for (const file of files) {
     const raw = await readText(join(dir, file))
     if (raw === null) continue
     try {
       const parsed = JSON.parse(raw)
       details.push(parsed.sessionId + ' @ ' + parsed.cwd)
+      const target = normalize(parsed.cwd || '')
+      if (target === home || target.startsWith(home + '/')) stray.push(file + '（' + parsed.cwd + '）')
     } catch {
       details.push(file + '（坏 JSON）')
     }
   }
   record('master', 'Master 会话记录', 'pass', details.join(' | '))
+  if (stray.length > 0) {
+    record(
+      'master',
+      '有 master 记录落在 DSH_HOME 里（历史遗留）',
+      'warn',
+      stray.join(' | ') + ' —— 那是「还没选工作区」的默认目录，删掉这些 json 即可；现在不会再新增',
+    )
+  }
 }
 
 async function checkRuntimeArtifacts() {

@@ -1064,3 +1064,42 @@ test('wiring：master_assign 的返回值必须是 lossless JSON（真机回归�
     await rm(dir, { recursive: true, force: true })
   }
 })
+test('wiring：cwd 落在 DSH_HOME 里就不引导 master（真机回归：为配置目录开了条 Master）', async () => {
+  const dir = await makeTempDir()
+  const savedHome = process.env.DSH_HOME
+  try {
+    process.env.DSH_HOME = dir
+    const { ctx, calls } = fakeCtx()
+    // 复刻真宿主停在首页时的默认目录：<DSH_HOME>/profiles/desktop
+    ctx.get = (name) =>
+      name === 'workingDirectory' ? { defaultDirectory: join(dir, 'profiles', 'desktop') } : undefined
+    await apply(ctx, { dataDir: dir })
+
+    const created = []
+    const scoped = {
+      get(name) {
+        if (name === 'agents') {
+          return {
+            async create(options) {
+              created.push(options)
+              options.setup({ tools: { restrict() {} } })
+              return { agent: { session: { id: options.sessionId } } }
+            },
+          }
+        }
+        if (name === 'workspaceRegistry') {
+          return { async create() { return { async attachSession() {} } }, async pinSession() {} }
+        }
+        if (name === 'sessionTitle') return { rename() {} }
+        return undefined
+      },
+    }
+    calls.injects[0].callback(scoped)
+    await new Promise((resolve) => setTimeout(resolve, 120))
+    assert.equal(created.length, 0, '配置目录里不许自动开 master 会话')
+  } finally {
+    if (savedHome === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = savedHome
+    await rm(dir, { recursive: true, force: true })
+  }
+})
