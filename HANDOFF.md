@@ -97,7 +97,7 @@
 ## 7. 下一个动作
 
 0. **（2026-11-18 遗留）重启后先验这三条**：① `master_experience op=list` 能看到 `<工作区>/.agent-master/experience.jsonl` 里的条目（>=1）；② `master_digest` 的 locator 落在 `~/.dsh/agent-master/…` 而不是 `~/agent-master/…`；③ 派发时点批准后**真的起得来子对话**（此前必报 `throwIfAborted`）。三条都对上才算这次修完。
-   旧数据（`C:\Users\charl\agent-master`）是修复前写错的目录，需要的话手工搬到 `~/.dsh/agent-master`；插件不会自动迁移。
+   修复前误写到 `C:\Users\charl\agent-master` 的 11 个文件已**逐字节核对后合并**进 `~/.dsh/agent-master`（0 冲突），源目录改名为 `agent-master.migrated-2026-11-18T23-58` 留作备份。插件本身不自动迁移，以后换机器要手工搬。
 
 1. **重启 DSH**（会结束当前会话，必须由用户操作；新代码只在重启后生效）。
 2. 重启后先跑 `node scripts/verify-restart.mjs`：`masters/*.json` 出现 = Master 会话引导成功；若仍是 ❌，用 `DSH_AGENT_MASTER_DEBUG=1` 重启一次看 stderr 里的 `[agent-master] master:` 诊断。
