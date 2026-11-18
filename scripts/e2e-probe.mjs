@@ -237,6 +237,22 @@ async function openPage(browserPath, url) {
   return { child, ws, logs, warnings, evaluate, send }
 }
 
+/**
+ * 轮询等待页面条件成立（返回条件值，超时返回 null）。
+ *
+ * 为什么不用固定 sleep：快照刷新走 changes 流或轮询，延迟不稳定；
+ * 固定睡 2.5s 会偶发「数据还没到就断言」的假红（本脚本真踩过一次）。
+ */
+async function waitFor(page, expression, timeoutMs = 12000) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    const value = await page.evaluate(expression)
+    if (value) return value
+    await sleep(250)
+  }
+  return null
+}
+
 /** 造一份和真快照同形状的 deck v2（字段与 client/client.js viewModel 对齐）。 */
 function deckFixture() {
   const now = Date.now()
@@ -347,18 +363,12 @@ async function runDataScenario(page) {
     updatedAt: Date.now(),
   })
   writeFileSync(join(deckDir, 'deck.json'), JSON.stringify(bumped, null, 2), 'utf8')
-  let refreshed = false
-  let waitedMs = 0
-  for (let round = 0; round < 14; round += 1) {
-    await sleep(500)
-    waitedMs += 500
-    const live = await page.evaluate("(function(){ var n = document.querySelector('[data-agent-master=\"deck\"]'); return n ? (n.innerText||'') : '' })()")
-    if (typeof live === 'string' && live.includes('实时刷新验证')) {
-      refreshed = true
-      break
-    }
-  }
-  check('看板变化实时刷到面板（无需刷新页面）', refreshed, refreshed ? '约 ' + waitedMs + 'ms' : '等了 ' + waitedMs + 'ms 仍未更新')
+  const liveStart = Date.now()
+  const liveOk = await waitFor(
+    page,
+    "(function(){ var n = document.querySelector('[data-agent-master=\"deck\"]'); return !!n && (n.innerText||'').indexOf('实时刷新验证') >= 0 })()",
+  )
+  check('看板变化实时刷到面板（无需刷新页面）', liveOk === true, '约 ' + (Date.now() - liveStart) + 'ms')
 
   // 六种状态必须目视可辨（把「六状态配色互不相同」这条人工勾选变成机器判据）
   const six = deckFixture()
@@ -375,12 +385,29 @@ async function runDataScenario(page) {
     updatedAt: Date.now(),
   }))
   writeFileSync(join(deckDir, 'deck.json'), JSON.stringify(six, null, 2), 'utf8')
-  await sleep(2500)
+  await waitFor(page, "document.querySelectorAll('[data-agent-master=\"deck\"] [data-card-id]').length === 6")
   // 色条在状态徽标上（data-tone），卡片容器只有灰底
   const colorsRaw = await page.evaluate("JSON.stringify(Array.from(document.querySelectorAll('[data-agent-master=\"deck\"] [data-card-id] [data-tone]')).map(function (e) { return e.getAttribute('data-tone') + '=' + getComputedStyle(e).color + '/' + getComputedStyle(e).borderLeftColor }))")
   const colors = JSON.parse(colorsRaw || '[]')
   const toneSet = new Set(colors.map((item) => item.split('=')[1]))
   check('六种状态颜色互不相同（目视可辨）', colors.length === 6 && toneSet.size === 6, JSON.stringify(colors).slice(0, 240))
+
+  // 点计数筛选：只看待验收 → 只剩 1 张；再点一次取消 → 回到 6 张
+  const beforeFilter = await page.evaluate("Array.from(document.querySelectorAll('[data-agent-master=\"deck\"] [data-card-id]')).length")
+  await page.evaluate("(function(){ var b = document.querySelector('[data-count-filter=\"review\"]'); if (b) b.click() })()")
+  const narrowed = await waitFor(page, "document.querySelectorAll('[data-agent-master=\"deck\"] [data-card-id]').length === 1")
+  const afterFilter = await page.evaluate("Array.from(document.querySelectorAll('[data-agent-master=\"deck\"] [data-card-id]')).map(function (e) { return e.getAttribute('data-status') })")
+  if (narrowed) {
+    const filteredShot = await screenshot(page, join(TMP, 'deck-panel-filtered.png'))
+    if (filteredShot !== null) log('  筛选截图：' + filteredShot)
+  }
+  await page.evaluate("(function(){ var b = document.querySelector('[data-count-filter=\"review\"]'); if (b) b.click() })()")
+  const restored = await waitFor(page, "document.querySelectorAll('[data-agent-master=\"deck\"] [data-card-id]').length === 6")
+  check(
+    '点计数可筛选，再点取消（都能回到全部）',
+    beforeFilter === 6 && narrowed === true && Array.isArray(afterFilter) && afterFilter.length === 1 && afterFilter[0] === 'review' && restored === true,
+    '全部 ' + beforeFilter + ' → 待验收 ' + JSON.stringify(afterFilter) + ' → 取消后 ' + String(restored === true ? 6 : '没回来'),
+  )
 
   // 窄面板 + 超长标题：右栏本来就窄，不许横向溢出（溢出就是被裁字，等于看不见）
   const narrow = deckFixture()
@@ -398,7 +425,7 @@ async function runDataScenario(page) {
   }]
   writeFileSync(join(deckDir, 'deck.json'), JSON.stringify(narrow, null, 2), 'utf8')
   await page.send('Emulation.setDeviceMetricsOverride', { width: 1000, height: 800, deviceScaleFactor: 1, mobile: false })
-  await sleep(2500)
+  await waitFor(page, "(function(){ var n = document.querySelector('[data-agent-master=\"deck\"]'); return !!n && (n.innerText||'').indexOf('证据链') >= 0 })()")
   const overflow = await page.evaluate("(function(){ var n = document.querySelector('[data-agent-master=\"deck\"]'); return n ? (n.scrollWidth - n.clientWidth) : -1 })()")
   check('窄面板 + 超长标题不横向溢出', typeof overflow === 'number' && overflow > -1 && overflow <= 1, 'overflow=' + String(overflow) + 'px')
 
@@ -411,11 +438,11 @@ async function runDataScenario(page) {
 }
 
 /** 截一张面板图，返回文件路径（给人工/模型看渲染效果）。 */
-async function screenshot(page) {
+async function screenshot(page, target = SHOT_FILE) {
   const shot = await page.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: true })
   if (!shot || typeof shot.data !== 'string') return null
-  writeFileSync(SHOT_FILE, Buffer.from(shot.data, 'base64'))
-  return SHOT_FILE
+  writeFileSync(target, Buffer.from(shot.data, 'base64'))
+  return target
 }
 
 async function main() {

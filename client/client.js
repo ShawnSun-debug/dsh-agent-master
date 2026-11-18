@@ -424,6 +424,25 @@ window.__ModuleLoader__.load({
       seq: { color: 'var(--dsh-text-secondary, #6b7280)', fontSize: '11px' },
       counts: { display: 'flex', gap: '10px', flexWrap: 'wrap' },
       count: { color: 'var(--dsh-text-secondary, #6b7280)' },
+      countButton: {
+        color: 'var(--dsh-text-secondary, #6b7280)',
+        background: 'transparent',
+        border: '1px solid transparent',
+        borderRadius: '4px',
+        padding: '0 4px',
+        font: 'inherit',
+        cursor: 'pointer',
+      },
+      countActive: {
+        color: 'var(--dsh-text-primary, #111827)',
+        background: 'rgba(37, 99, 235, 0.10)',
+        border: '1px solid rgba(37, 99, 235, 0.45)',
+        borderRadius: '4px',
+        padding: '0 4px',
+        font: 'inherit',
+        cursor: 'pointer',
+        fontWeight: 600,
+      },
       countDanger: { color: TONE_COLORS.danger, fontWeight: 600 },
       alert: {
         padding: '8px 10px',
@@ -530,14 +549,70 @@ window.__ModuleLoader__.load({
       )
     }
 
+    /** 筛选键 -> 中文标签（放在标题行里说清当前只看什么）。 */
+    function filterLabel(filter) {
+      var labels = { cards: '全部卡片', doing: '在做', review: '待验收', violations: '有违规' }
+      return labels[filter] || String(filter)
+    }
+
+    /**
+     * 顶部计数兼作筛选：点「待验收」只看待验收的卡，再点一次取消。
+     * 卡多了以后不筛选就得一直滚，这是监控面板最常用的动作。
+     *
+     * @param {any[]} cards
+     * @param {string | null} filter
+     * @returns {any[]}
+     */
+    function filterCards(cards, filter) {
+      var list = Array.isArray(cards) ? cards : []
+      if (filter === 'doing') {
+        return list.filter(function (card) {
+          return card.status !== 'done'
+        })
+      }
+      if (filter === 'review') {
+        return list.filter(function (card) {
+          return card.status === 'review'
+        })
+      }
+      if (filter === 'violations') {
+        return list.filter(function (card) {
+          return card.violations > 0
+        })
+      }
+      return list
+    }
+
     /** 顶部：五项计数。 */
     function CountsRow(props) {
+      var filterable = { cards: true, doing: true, review: true, violations: true }
+      var select = typeof props.onSelect === 'function' ? props.onSelect : null
       return h(
         'div',
         { style: STYLES.counts },
         props.items.map(function (item) {
           var style = item.key === 'violations' && item.value > 0 ? STYLES.countDanger : STYLES.count
-          return h('span', { key: item.key, style: style, title: item.hint || null }, item.label + ' ' + item.value)
+          var clickable = select !== null && filterable[item.key] === true
+          var active = clickable && props.active === item.key
+          if (!clickable) {
+            return h('span', { key: item.key, style: style, title: item.hint || null }, item.label + ' ' + item.value)
+          }
+          var buttonStyle = Object.assign({}, style, active ? STYLES.countActive : STYLES.countButton)
+          return h(
+            'button',
+            {
+              key: item.key,
+              type: 'button',
+              style: buttonStyle,
+              title: (item.hint || item.label) + (active ? '（点一下取消筛选）' : '（点一下只看这类）'),
+              'data-count-filter': item.key,
+              'data-active': active ? 'yes' : 'no',
+              onClick: function () {
+                select(active ? null : item.key)
+              },
+            },
+            item.label + ' ' + item.value,
+          )
         }),
       )
     }
@@ -894,6 +969,10 @@ window.__ModuleLoader__.load({
       // hooks 规则：useDeckState（内部含 useState/useEffect/useProjection）必须无条件调用。
       var state = useDeckState(props)
       var model = viewModel(state)
+      // 筛选是纯 UI 状态：换快照不重置，用户正看着某一类时不该被打断
+      var filterPair = React.useState(null)
+      var filter = filterPair[0]
+      var setFilter = filterPair[1]
 
       if (model.empty) {
         // 绑了会话才谈得上「下派」；没绑会话先指路，否则用户只看到一句无从下手的话。
@@ -916,18 +995,24 @@ window.__ModuleLoader__.load({
         )
       }
 
+      var shown = filterCards(model.cards, filter)
       return h(
         'div',
         { style: STYLES.root, 'data-agent-master': 'deck' },
         h(DeckHeader, { model: model }),
         model.alert ? h(AlertRow, { alert: model.alert }) : null,
-        h(CountsRow, { items: model.countItems }),
-        h(SectionTitle, { text: '看板' }),
-        model.cards.length > 0
+        h(CountsRow, { items: model.countItems, active: filter, onSelect: setFilter }),
+        h(
+          SectionTitle,
+          filter === null
+            ? { text: '看板' }
+            : { text: '看板 · 只看' + filterLabel(filter) + '（' + shown.length + ' 张，再点一次计数取消）' },
+        ),
+        shown.length > 0
           ? h(
               'div',
               { style: STYLES.cards },
-              model.cards.map(function (card, index) {
+              shown.map(function (card, index) {
                 return h(CardRow, {
                   key: card.id || String(index),
                   card: card,
@@ -941,7 +1026,13 @@ window.__ModuleLoader__.load({
                 })
               }),
             )
-          : h('div', { style: STYLES.muted }, '看板上还没有卡 —— 用 master_dispatch 或 master_assign 派一路'),
+          : h(
+              'div',
+              { style: STYLES.muted },
+              model.cards.length === 0
+                ? '看板上还没有卡 —— 用 master_dispatch 或 master_assign 派一路'
+                : '这个筛选下没有卡片 —— 点一下顶部对应的计数取消筛选',
+            ),
         h(SectionTitle, { text: '最近记录' }),
         model.recent.length > 0
           ? h(
@@ -1237,6 +1328,8 @@ window.__ModuleLoader__.load({
     exports.statusTone = statusTone
     exports.kindLabel = kindLabel
     exports.countItems = countItems
+    exports.filterCards = filterCards
+    exports.filterLabel = filterLabel
     exports.chatAddress = chatAddress
     exports.toneColors = TONE_COLORS
     exports.deckBadge = deckBadge

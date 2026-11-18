@@ -460,3 +460,18 @@ test('client：每个计数都带含义提示（「卡片 3」看不出含不含
   }
   assert.ok(items.find((item) => item.key === 'cards').hint.includes('含已结案'))
 })
+test('client：点计数可以只看一类卡（待验收/在做/有违规）', () => {
+  const cards = [
+    { id: 'a', status: 'done', violations: 0 },
+    { id: 'b', status: 'review', violations: 2 },
+    { id: 'c', status: 'doing', violations: 0 },
+    { id: 'd', status: 'blocked', violations: 1 },
+  ]
+  assert.equal(client.filterCards(cards, null).length, 4, '不筛选就是全部')
+  assert.deepEqual(client.filterCards(cards, 'review').map((c) => c.id), ['b'])
+  assert.deepEqual(client.filterCards(cards, 'doing').map((c) => c.id), ['b', 'c', 'd'], '在做 = 未结案')
+  assert.deepEqual(client.filterCards(cards, 'violations').map((c) => c.id), ['b', 'd'])
+  assert.deepEqual(client.filterCards(undefined, 'review'), [], '坏输入给空数组，不抛')
+  assert.equal(client.filterLabel('review'), '待验收')
+  assert.equal(client.filterLabel('未知键'), '未知键')
+})
