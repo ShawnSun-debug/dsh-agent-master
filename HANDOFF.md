@@ -20,7 +20,7 @@
 | 项 | 值 |
 |---|---|
 | 票 | T09 / T10 / T11 / T12 / T13 **全部完成** |
-| 测试 | 19 个文件 / 288 例，全绿（`node scripts/test.mjs`）+ 独立 profile 真浏览器 E2E（`npm run test:e2e`：5 项；`--with-data` 14 项，含真会话 + 真快照 + 截图） |
+| 测试 | 19 个文件 / 289 例，全绿（`node scripts/test.mjs`）+ 独立 profile 真浏览器 E2E（`npm run test:e2e`：5 项；`--with-data` 16 项，含真会话 + 真快照 + 实时刷新 + 六状态配色 + 截图） |
 | 真机 | 工具层全链路 + Master 会话引导（真宿主建会话、置顶、`masters/*.json` 落盘）已验证；审批 fail-closed 已验证（`PROGRESS.md` §3.5） |
 | 未验证 | 3 条 **GUI 侧**，见 `PROGRESS.md` §4 与 `docs/e2e-checklist.md` |
 | 插件 | 已装进 desktop profile（`link:` 指向本仓库，改代码重启即生效） |

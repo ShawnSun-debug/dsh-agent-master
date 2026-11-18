@@ -33,14 +33,19 @@ node scripts/verify-restart.mjs        # 加 --json 可机读
 - [x] 落盘证据：`~/.dsh/agent-master/<rootId>/board.json`、`<cwd>/.agent-master/<rootId>/deck.json`（v2）、
       `<cwd>/.agent-master/experience.jsonl`
 
-**仍未验证的只有下面 GUI 侧三条**（要人看着屏幕）：审批卡片弹出并被点批准、`changes` 流/轮询自动刷新、六状态目视可辨。
+**GUI 侧三条里，两条已机器化**（2026-11-19，独立 profile + 无头浏览器 + CDP，`npm run test:e2e -- --with-data`）：
+
+- [x] `changes` 流/轮询自动刷新 —— E2E 改写快照后**约 500ms** 面板自己跟上（无需刷新页面）
+- [x] 六状态目视可辨 —— E2E 用六种状态的真快照读徽标计算色值，六色互不相同
+
+**只剩一条真要人看着屏幕**：审批卡片弹出并被点批准（无头宿主没有审批应答者，属于 fail-closed 边界，不做自动化）。
 
 ## 1. 冒烟（5 分钟）
 
 - [ ] DSH 启动**无报错弹窗**；插件页能看到 `dsh-agent-master`
 - [ ] 新开会话，问模型「你现在有哪些 master_ 开头的工具」→ 应列出 7 个：
       `master_assign` / `master_dispatch` / `master_report` / `master_collect` / `master_board` / `master_digest` / `master_experience`
-- [ ] 右侧栏出现 **指挥台** 标签（空态文案：还没有下派任何子对话）
+- [x] 右侧栏出现 **指挥台** 标签（空态文案给出可执行的下一步）—— 独立 profile E2E 已验（入口/点击/渲染/零控制台错误）
 - [ ] 让模型开一个子对话后，子对话里同样能看到 `master_report`（这条最容易失败：子 preset 可能不暴露本包工具）
 
 ## 1.5 Master 会话（T9 新增，重启后先看这一节）

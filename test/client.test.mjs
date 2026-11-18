@@ -452,3 +452,11 @@ test('client：胶囊 tooltip 说清数字含义（2/3 不能让人猜）', () =
   const danger = client.deckBadgeTitle({ total: 3, running: 2, violated: true })
   assert.ok(danger.includes('违规'), danger)
 })
+test('client：每个计数都带含义提示（「卡片 3」看不出含不含已结案）', () => {
+  const items = client.countItems({ cards: 3, doing: 1, review: 1, violations: 1, records: 9 })
+  assert.equal(items.length, 5)
+  for (const item of items) {
+    assert.ok(typeof item.hint === 'string' && item.hint.length > 4, item.key + ' 缺含义提示')
+  }
+  assert.ok(items.find((item) => item.key === 'cards').hint.includes('含已结案'))
+})

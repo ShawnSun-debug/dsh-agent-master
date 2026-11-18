@@ -80,6 +80,15 @@ window.__ModuleLoader__.load({
       ['records', '记录'],
     ]
 
+    /** 每个计数的含义：光看「卡片 3」没人知道含不含已结案，悬停补一句。 */
+    var COUNT_HINTS = {
+      cards: '卡片总数（含已结案的）',
+      doing: '正在跑的卡（未结案，含阻塞待处理）',
+      review: '子对话已回报、等你验收的卡',
+      violations: '回报与约束台账不符的条数',
+      records: '证据流条数（发现/来源/产物/待答问题）',
+    }
+
     /** 六种卡片状态 -> 徽标文案（顺序即看板列顺序：todo/assigned/doing/review/done/blocked）。 */
     var STATUS_LABELS = {
       todo: '待认领',
@@ -129,7 +138,7 @@ window.__ModuleLoader__.load({
     function countItems(counts) {
       var source = counts && typeof counts === 'object' ? counts : {}
       return COUNT_FIELDS.map(function (field) {
-        return { key: field[0], label: field[1], value: num(source[field[0]]) }
+        return { key: field[0], label: field[1], value: num(source[field[0]]), hint: COUNT_HINTS[field[0]] || '' }
       })
     }
 
@@ -528,7 +537,7 @@ window.__ModuleLoader__.load({
         { style: STYLES.counts },
         props.items.map(function (item) {
           var style = item.key === 'violations' && item.value > 0 ? STYLES.countDanger : STYLES.count
-          return h('span', { key: item.key, style: style }, item.label + ' ' + item.value)
+          return h('span', { key: item.key, style: style, title: item.hint || null }, item.label + ' ' + item.value)
         }),
       )
     }
@@ -603,7 +612,8 @@ window.__ModuleLoader__.load({
           'div',
           { style: STYLES.cardTop },
           h('span', { style: STYLES.cardName }, (card.id ? card.id + ' · ' : '') + (card.label || '（无标题）')),
-          h('span', { style: badgeStyle }, card.statusText),
+          // data-tone 给测试与排障用：六种状态必须落在六种色调上（人工勾选已机器化）
+          h('span', { style: badgeStyle, 'data-tone': card.tone }, card.statusText),
         ),
         h('div', { style: STYLES.muted }, meta.join(' · ')),
         h('div', { style: STYLES.muted }, stats),

@@ -332,6 +332,56 @@ async function runDataScenario(page) {
   const pillTitle = await page.evaluate("(function(){ var b = document.querySelector('[data-agent-master=\"deck-pill\"]'); return b ? (b.getAttribute('title') || '') : '' })()")
   check('胶囊 tooltip 说清数字含义', typeof pillTitle === 'string' && pillTitle.includes('未结案'), String(pillTitle))
 
+  // 实时性：改快照文件，面板必须自己跟上（订阅 changes 或轮询回退），不能要用户刷新页面
+  const bumped = deckFixture()
+  bumped.revision = 43
+  bumped.cards.push({
+    id: 't4',
+    label: '实时刷新验证',
+    status: 'todo',
+    priority: 'P3',
+    rev: 1,
+    assignee: null,
+    sessionId: '',
+    counts: { findings: 0, sources: 0, artifacts: 0, violations: 0 },
+    updatedAt: Date.now(),
+  })
+  writeFileSync(join(deckDir, 'deck.json'), JSON.stringify(bumped, null, 2), 'utf8')
+  let refreshed = false
+  let waitedMs = 0
+  for (let round = 0; round < 14; round += 1) {
+    await sleep(500)
+    waitedMs += 500
+    const live = await page.evaluate("(function(){ var n = document.querySelector('[data-agent-master=\"deck\"]'); return n ? (n.innerText||'') : '' })()")
+    if (typeof live === 'string' && live.includes('实时刷新验证')) {
+      refreshed = true
+      break
+    }
+  }
+  check('看板变化实时刷到面板（无需刷新页面）', refreshed, refreshed ? '约 ' + waitedMs + 'ms' : '等了 ' + waitedMs + 'ms 仍未更新')
+
+  // 六种状态必须目视可辨（把「六状态配色互不相同」这条人工勾选变成机器判据）
+  const six = deckFixture()
+  six.revision = 44
+  six.cards = ['todo', 'assigned', 'doing', 'review', 'done', 'blocked'].map((status, index) => ({
+    id: 's' + (index + 1),
+    label: '状态 ' + status,
+    status,
+    priority: 'P2',
+    rev: 1,
+    assignee: null,
+    sessionId: '',
+    counts: { findings: 0, sources: 0, artifacts: 0, violations: 0 },
+    updatedAt: Date.now(),
+  }))
+  writeFileSync(join(deckDir, 'deck.json'), JSON.stringify(six, null, 2), 'utf8')
+  await sleep(2500)
+  // 色条在状态徽标上（data-tone），卡片容器只有灰底
+  const colorsRaw = await page.evaluate("JSON.stringify(Array.from(document.querySelectorAll('[data-agent-master=\"deck\"] [data-card-id] [data-tone]')).map(function (e) { return e.getAttribute('data-tone') + '=' + getComputedStyle(e).color + '/' + getComputedStyle(e).borderLeftColor }))")
+  const colors = JSON.parse(colorsRaw || '[]')
+  const toneSet = new Set(colors.map((item) => item.split('=')[1]))
+  check('六种状态颜色互不相同（目视可辨）', colors.length === 6 && toneSet.size === 6, JSON.stringify(colors).slice(0, 240))
+
   // 点卡片会尝试打开子会话；假会话号必然打不开，但**绝不能让面板崩掉**
   const clickedCard = await page.evaluate("(function(){ var c = document.querySelector('[data-agent-master=\"deck\"] [data-card-id]'); if (!c) return 'NO_CARD'; c.click(); return 'CLICKED' })()")
   await sleep(1200)
