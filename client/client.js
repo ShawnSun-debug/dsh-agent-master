@@ -265,6 +265,16 @@ window.__ModuleLoader__.load({
      *
      * @returns {{ text: string, total: number, running: number, violated: boolean, tone: string }}
      */
+    /**
+     * 胶囊的 tooltip：把 2/3 说清楚（光看数字猜不出是「未结案/总数」）。
+     * @param {{ total: number, running: number, violated: boolean }} badge
+     */
+    function deckBadgeTitle(badge) {
+      if (!badge || !badge.total) return DECK_TITLE
+      var base = DECK_TITLE + '：' + badge.running + ' 张未结案 / 共 ' + badge.total + ' 张'
+      return badge.violated ? base + '（有违规待处理）' : base
+    }
+
     function deckBadge(state) {
       var model = viewModel(state)
       if (model.empty) {
@@ -571,6 +581,7 @@ window.__ModuleLoader__.load({
             role: 'button',
             tabIndex: 0,
             'data-status': card.status,
+            'data-card-id': card.id,
             title: '打开子对话（右侧栏）',
             onClick: openCard,
             onKeyDown: function (event) {
@@ -582,6 +593,7 @@ window.__ModuleLoader__.load({
         : {
             style: STYLES.card,
             'data-status': card.status,
+            'data-card-id': card.id,
             title: card.sessionId === '' ? '这张卡还没有子会话号，无法打开子对话' : '打开子对话（右侧栏）',
           }
       return h(
@@ -857,7 +869,7 @@ window.__ModuleLoader__.load({
         'button',
         {
           type: 'button',
-          title: DECK_TITLE,
+          title: deckBadgeTitle(badge),
           'data-agent-master': 'deck-pill',
           style: style,
           onClick: function () {
@@ -1218,6 +1230,7 @@ window.__ModuleLoader__.load({
     exports.chatAddress = chatAddress
     exports.toneColors = TONE_COLORS
     exports.deckBadge = deckBadge
+    exports.deckBadgeTitle = deckBadgeTitle
     exports.formatTime = formatTime
     exports.openDeckTab = openDeckTab
     exports.deckRelativePath = deckRelativePath

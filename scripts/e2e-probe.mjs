@@ -320,6 +320,23 @@ async function runDataScenario(page) {
   const text = await page.evaluate("(function(){ var n = document.querySelector('[data-agent-master=\"deck\"]'); return n ? (n.innerText||'') : '' })()")
   check('面板渲染出真实卡片', typeof text === 'string' && text.includes('修指挥台空白') && text.includes('看板数据层'), JSON.stringify(String(text).slice(0, 220)))
   check('面板显示状态与优先级', typeof text === 'string' && /P0|P1/.test(text) && /进行中|待验收|已完成/.test(text), JSON.stringify(String(text).slice(0, 220)))
+
+  // 截图前按 Esc 关掉宿主自己的浮层（「开始使用」登录提示会正好压在面板中间）
+  await page.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 })
+  await page.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 })
+  await sleep(600)
+  const shotBefore = await screenshot(page)
+  if (shotBefore !== null) log('  截图：' + shotBefore)
+
+  // 快照写进去之后胶囊才有数字，tooltip 必须说清 2/3 是什么意思
+  const pillTitle = await page.evaluate("(function(){ var b = document.querySelector('[data-agent-master=\"deck-pill\"]'); return b ? (b.getAttribute('title') || '') : '' })()")
+  check('胶囊 tooltip 说清数字含义', typeof pillTitle === 'string' && pillTitle.includes('未结案'), String(pillTitle))
+
+  // 点卡片会尝试打开子会话；假会话号必然打不开，但**绝不能让面板崩掉**
+  const clickedCard = await page.evaluate("(function(){ var c = document.querySelector('[data-agent-master=\"deck\"] [data-card-id]'); if (!c) return 'NO_CARD'; c.click(); return 'CLICKED' })()")
+  await sleep(1200)
+  const alive = await page.evaluate("(function(){ var n = document.querySelector('[data-agent-master=\"deck\"]'); return n ? (n.innerText||'').length : 0 })()")
+  check('点卡片不会把面板点崩', clickedCard === 'CLICKED' && typeof alive === 'number' && alive > 20, String(clickedCard) + ' / 剩 ' + String(alive) + ' 字')
   return { deckDir, text }
 }
 
@@ -364,8 +381,6 @@ async function main() {
 
     if (WITH_DATA) {
       scenario = await runDataScenario(page)
-      const shot = await screenshot(page)
-      if (shot !== null) log('  截图：' + shot)
       check('数据场景没有新增控制台错误', page.logs.length === 0, page.logs.slice(0, 3).join(' | '))
     }
   } finally {
