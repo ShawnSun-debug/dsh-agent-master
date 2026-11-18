@@ -231,7 +231,13 @@ window.__ModuleLoader__.load({
     function toRecent(item) {
       var source = item && typeof item === 'object' ? item : {}
       var kind = text(source.kind)
-      return { seq: num(source.seq), kind: kind, kindLabel: kindLabel(kind), title: text(source.title) }
+      return {
+        seq: num(source.seq),
+        kind: kind,
+        kindLabel: kindLabel(kind),
+        cardId: text(source.cardId),
+        title: text(source.title),
+      }
     }
 
     /** recent 按 seq 降序（新的在前）；seq 相同则保持入参顺序。 */
@@ -396,60 +402,191 @@ window.__ModuleLoader__.load({
     // 渲染层：只用 react 的 createElement，不引第三方组件库
     // ---------------------------------------------------------------------
 
+    // ---------------------------------------------------------------------
+    // 设计 token：对齐宿主自己的语言（正文 #0f1115 / 次级 #61666b / 主色 #4176e6 /
+    // 表面 #f9fafb / 圆角 8-12 / 过渡 .2s），这样面板看起来是「这个应用的一部分」，
+    // 而不是外挂的调试面板。
+    // ---------------------------------------------------------------------
+    var TOKENS = {
+      text: '#0f1115',
+      textSecondary: '#61666b',
+      textTertiary: '#81858c',
+      accent: '#4176e6',
+      accentSoft: 'rgba(65, 118, 230, 0.10)',
+      accentLine: 'rgba(65, 118, 230, 0.38)',
+      surface: '#ffffff',
+      surfaceMuted: '#f9fafb',
+      hover: 'rgba(38, 49, 72, 0.06)',
+      line: 'rgba(38, 49, 72, 0.10)',
+      lineStrong: 'rgba(38, 49, 72, 0.18)',
+      dangerSoft: 'rgba(192, 38, 38, 0.07)',
+      dangerLine: 'rgba(192, 38, 38, 0.22)',
+      dangerText: '#a4231b',
+      shadow: '0 1px 2px rgba(15, 17, 21, 0.05)',
+      shadowHover: '0 2px 10px rgba(15, 17, 21, 0.09)',
+      motion: 'background-color .15s ease, border-color .15s ease, box-shadow .15s ease',
+      radiusSm: '8px',
+      radiusMd: '12px',
+      mono: 'var(--ds-font-family-code, ui-monospace, SFMono-Regular, Menlo, monospace)',
+    }
+
+    /** 色调的淡化底（白底上仍满足正文对比度，徽标用它当底色）。 */
+    var TONE_TINTS = {
+      muted: 'rgba(97, 102, 107, 0.10)',
+      info: 'rgba(47, 111, 224, 0.10)',
+      progress: 'rgba(124, 58, 237, 0.10)',
+      warn: 'rgba(180, 83, 9, 0.12)',
+      success: 'rgba(21, 128, 61, 0.10)',
+      danger: 'rgba(192, 38, 38, 0.10)',
+    }
+
     /** 徽标、提示条用到的色调（六种状态复用这六种颜色，保证肉眼可分）。 */
     var TONE_COLORS = {
-      muted: '#6b7280',
-      info: '#2563eb',
+      muted: '#61666b',
+      info: '#2f6fe0',
       progress: '#7c3aed',
       warn: '#b45309',
       success: '#15803d',
-      danger: '#b91c1c',
+      danger: '#c02626',
     }
 
-    /** 面板样式：内联对象，跟随主题变量并带浅色兜底。 */
+    /** 面板样式：内联对象（客户端是经典脚本，不引样式表）。 */
     var STYLES = {
       root: {
         display: 'flex',
         flexDirection: 'column',
-        gap: '10px',
+        gap: '18px',
         height: '100%',
-        padding: '12px',
+        padding: '16px 16px 20px',
         overflowY: 'auto',
         fontSize: '12px',
-        lineHeight: '1.6',
-        color: 'var(--dsh-text-primary, #111827)',
+        lineHeight: '1.55',
+        color: TOKENS.text,
+        fontVariantNumeric: 'tabular-nums',
       },
       header: { display: 'flex', alignItems: 'baseline', gap: '8px', flexWrap: 'wrap' },
-      title: { fontSize: '13px', fontWeight: 600 },
-      seq: { color: 'var(--dsh-text-secondary, #6b7280)', fontSize: '11px' },
-      counts: { display: 'flex', gap: '10px', flexWrap: 'wrap' },
-      count: { color: 'var(--dsh-text-secondary, #6b7280)' },
-      countButton: {
-        color: 'var(--dsh-text-secondary, #6b7280)',
-        background: 'transparent',
+      title: { fontSize: '14px', fontWeight: 650, letterSpacing: '-0.01em' },
+      headerMeta: { display: 'inline-flex', alignItems: 'baseline', gap: '6px', color: TOKENS.textTertiary, fontSize: '11px' },
+      dot: { color: TOKENS.textTertiary },
+      counts: { display: 'flex', gap: '8px', flexWrap: 'wrap' },
+      chip: {
+        display: 'inline-flex',
+        alignItems: 'baseline',
+        gap: '6px',
+        padding: '5px 10px',
+        borderRadius: TOKENS.radiusSm,
+        background: TOKENS.surfaceMuted,
         border: '1px solid transparent',
-        borderRadius: '4px',
-        padding: '0 4px',
+        color: TOKENS.textSecondary,
         font: 'inherit',
-        cursor: 'pointer',
+        fontSize: '11px',
+        transition: TOKENS.motion,
+        whiteSpace: 'nowrap',
       },
-      countActive: {
-        color: 'var(--dsh-text-primary, #111827)',
-        background: 'rgba(37, 99, 235, 0.10)',
-        border: '1px solid rgba(37, 99, 235, 0.45)',
-        borderRadius: '4px',
-        padding: '0 4px',
-        font: 'inherit',
-        cursor: 'pointer',
-        fontWeight: 600,
-      },
-      countDanger: { color: TONE_COLORS.danger, fontWeight: 600 },
+      chipButton: { cursor: 'pointer' },
+      chipHover: { background: TOKENS.hover, color: TOKENS.text },
+      chipHoverDanger: { background: 'rgba(192, 38, 38, 0.12)' },
+      chipDanger: { background: TOKENS.dangerSoft, borderColor: TOKENS.dangerLine, color: TOKENS.dangerText },
+      chipActive: { background: TOKENS.accentSoft, borderColor: TOKENS.accentLine, color: TOKENS.accent },
+      chipLabel: { fontSize: '10.5px', letterSpacing: '0.02em', opacity: 0.9 },
+      chipValue: { fontSize: '12.5px', fontWeight: 650, color: TOKENS.text },
+      chipValueDanger: { color: TONE_COLORS.danger },
+      chipValueActive: { color: TOKENS.accent },
       alert: {
-        padding: '8px 10px',
+        display: 'flex',
+        alignItems: 'flex-start',
+        gap: '8px',
+        padding: '10px 12px',
+        borderRadius: TOKENS.radiusMd,
+        background: TOKENS.dangerSoft,
+        border: '1px solid ' + TOKENS.dangerLine,
+        color: TOKENS.dangerText,
+        fontSize: '11.5px',
+        lineHeight: '1.5',
+      },
+      alertDot: { width: '6px', height: '6px', borderRadius: '999px', background: TONE_COLORS.danger, marginTop: '6px', flex: 'none' },
+      section: { display: 'flex', alignItems: 'center', gap: '10px' },
+      sectionText: {
+        fontSize: '10.5px',
+        fontWeight: 650,
+        letterSpacing: '0.10em',
+        color: TOKENS.textTertiary,
+        textTransform: 'uppercase',
+        whiteSpace: 'nowrap',
+      },
+      sectionHint: { fontSize: '10.5px', color: TOKENS.textTertiary, whiteSpace: 'nowrap' },
+      sectionRule: { flex: 1, height: '1px', background: TOKENS.line, minWidth: '12px' },
+      cards: { display: 'flex', flexDirection: 'column', gap: '8px' },
+      card: {
+        display: 'flex',
+        flexDirection: 'column',
+        padding: '11px 12px 10px',
+        borderRadius: TOKENS.radiusMd,
+        background: TOKENS.surface,
+        border: '1px solid ' + TOKENS.line,
+        boxShadow: TOKENS.shadow,
+        transition: TOKENS.motion,
+      },
+      cardHover: { borderColor: TOKENS.lineStrong, boxShadow: TOKENS.shadowHover },
+      cardClickable: { cursor: 'pointer' },
+      cardTop: { display: 'flex', alignItems: 'flex-start', gap: '8px' },
+      cardId: {
+        flex: 'none',
+        fontFamily: TOKENS.mono,
+        fontSize: '10.5px',
+        lineHeight: '18px',
+        color: TOKENS.textTertiary,
+        background: TOKENS.surfaceMuted,
+        padding: '0 6px',
         borderRadius: '6px',
-        background: 'rgba(220, 38, 38, 0.10)',
-        border: '1px solid ' + TONE_COLORS.danger,
-        color: TONE_COLORS.danger,
+        border: '1px solid ' + TOKENS.line,
+      },
+      cardName: { flex: 1, minWidth: 0, fontSize: '12.5px', fontWeight: 600, lineHeight: '1.45', overflowWrap: 'anywhere' },
+      badge: {
+        flex: 'none',
+        padding: '2px 8px',
+        borderRadius: '999px',
+        fontSize: '10.5px',
+        fontWeight: 650,
+        lineHeight: '16px',
+        whiteSpace: 'nowrap',
+        border: '1px solid transparent',
+      },
+      cardMeta: {
+        display: 'flex',
+        flexWrap: 'wrap',
+        gap: '4px 12px',
+        marginTop: '8px',
+        paddingTop: '8px',
+        borderTop: '1px solid ' + TOKENS.line,
+        fontSize: '11px',
+        color: TOKENS.textTertiary,
+      },
+      metaStrong: { color: TOKENS.textSecondary, fontWeight: 600 },
+      timeline: { display: 'flex', flexDirection: 'column', gap: '2px' },
+      timelineRow: { display: 'flex', alignItems: 'baseline', gap: '8px', padding: '4px 2px', borderRadius: '6px', fontSize: '11px' },
+      seq: { fontFamily: TOKENS.mono, fontSize: '10.5px', color: TOKENS.textTertiary, minWidth: '30px', textAlign: 'right', flex: 'none' },
+      kind: {
+        flex: 'none',
+        fontSize: '10px',
+        color: TOKENS.textSecondary,
+        background: TOKENS.surfaceMuted,
+        borderRadius: '4px',
+        padding: '0 5px',
+        lineHeight: '16px',
+      },
+      cardRef: { flex: 'none', fontFamily: TOKENS.mono, fontSize: '10px', color: TOKENS.textTertiary },
+      timelineTitle: { color: TOKENS.textSecondary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+      muted: { color: TOKENS.textTertiary },
+      focusRing: { outline: '2px solid ' + TOKENS.accentLine, outlineOffset: '2px' },
+      empty: {
+        padding: '14px',
+        borderRadius: TOKENS.radiusMd,
+        background: TOKENS.surfaceMuted,
+        border: '1px dashed ' + TOKENS.lineStrong,
+        color: TOKENS.textSecondary,
+        fontSize: '11.5px',
+        lineHeight: '1.6',
       },
       footerButton: {
         display: 'inline-flex',
@@ -457,7 +594,7 @@ window.__ModuleLoader__.load({
         gap: '6px',
         padding: '4px 8px',
         borderRadius: '6px',
-        border: '1px solid var(--dsh-border, #e5e7eb)',
+        border: '1px solid ' + TOKENS.line,
         background: 'transparent',
         color: 'inherit',
         cursor: 'pointer',
@@ -466,46 +603,15 @@ window.__ModuleLoader__.load({
       pill: {
         display: 'inline-flex',
         alignItems: 'center',
+        gap: '4px',
         padding: '2px 8px',
         borderRadius: '999px',
-        border: '1px solid var(--dsh-border, #e5e7eb)',
+        border: '1px solid ' + TOKENS.line,
         background: 'transparent',
         color: 'inherit',
         cursor: 'pointer',
         fontSize: '11px',
         whiteSpace: 'nowrap',
-      },
-      cards: { display: 'flex', flexDirection: 'column', gap: '8px' },
-      card: {
-        display: 'flex',
-        flexDirection: 'column',
-        gap: '2px',
-        padding: '8px 10px',
-        borderRadius: '6px',
-        border: '1px solid var(--dsh-border, #e5e7eb)',
-      },
-      cardClickable: { cursor: 'pointer' },
-      cardTop: { display: 'flex', alignItems: 'center', gap: '8px', justifyContent: 'space-between' },
-      cardName: { fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontWeight: 600 },
-      cardLabel: { color: 'var(--dsh-text-secondary, #6b7280)' },
-      badge: {
-        padding: '0 6px',
-        borderRadius: '999px',
-        border: '1px solid currentColor',
-        fontSize: '11px',
-        whiteSpace: 'nowrap',
-      },
-      sectionTitle: { fontSize: '11px', fontWeight: 600, letterSpacing: '0.08em', opacity: 0.75 },
-      timeline: { display: 'flex', flexDirection: 'column', gap: '4px' },
-      timelineRow: { display: 'flex', gap: '8px', alignItems: 'baseline' },
-      kind: { color: 'var(--dsh-text-secondary, #6b7280)', whiteSpace: 'nowrap' },
-      timelineTitle: { overflow: 'hidden', textOverflow: 'ellipsis' },
-      muted: { color: 'var(--dsh-text-secondary, #6b7280)' },
-      empty: {
-        padding: '10px',
-        borderRadius: '6px',
-        border: '1px dashed var(--dsh-border, #d1d5db)',
-        color: 'var(--dsh-text-secondary, #6b7280)',
       },
     }
 
@@ -537,15 +643,20 @@ window.__ModuleLoader__.load({
       }
     }
 
-    /** 顶部：标题 + 黑板 seq + 更新时间。 */
+    /** 顶部：标题 + 看板版本 + 更新时间（次级信息不抢标题的重量）。 */
     function DeckHeader(props) {
       var model = props.model
       return h(
         'div',
         { style: STYLES.header },
         h('span', { style: STYLES.title }, DECK_TITLE),
-        h('span', { style: STYLES.seq }, model.revision > 0 ? '看板 rev ' + model.revision : '看板尚无记录'),
-        model.updatedAt > 0 ? h('span', { style: STYLES.seq }, '更新于 ' + formatTime(model.updatedAt)) : null,
+        h(
+          'span',
+          { style: STYLES.headerMeta },
+          h('span', null, model.revision > 0 ? '看板 rev ' + model.revision : '看板尚无记录'),
+          model.updatedAt > 0 ? h('span', { style: STYLES.dot }, '·') : null,
+          model.updatedAt > 0 ? h('span', null, '更新于 ' + formatTime(model.updatedAt)) : null,
+        ),
       )
     }
 
@@ -583,7 +694,69 @@ window.__ModuleLoader__.load({
       return list
     }
 
-    /** 顶部：五项计数。 */
+    /**
+     * 内联样式写不了 :hover / :focus，用一对状态兜住交互反馈。
+     * 组件里无条件调用（hooks 规则）；返回 [当前样式, 事件处理器]。
+     */
+    function useInteractive(base, hoverStyle, focusStyle) {
+      var pair = React.useState(false)
+      var focusPair = React.useState(false)
+      var hot = pair[0]
+      var focused = focusPair[0]
+      var setHot = pair[1]
+      var setFocused = focusPair[1]
+      var style = hot && hoverStyle ? Object.assign({}, base, hoverStyle) : base
+      if (focused && focusStyle) style = Object.assign({}, style, focusStyle)
+      return [
+        style,
+        {
+          onMouseEnter: function () { setHot(true) },
+          onMouseLeave: function () { setHot(false) },
+          onFocus: function () { setFocused(true) },
+          onBlur: function () { setFocused(false) },
+        },
+      ]
+    }
+
+    /** 一个计数片：标签轻、数字重；可点的带 hover 与选中态。 */
+    function CountChip(props) {
+      var item = props.item
+      var clickable = typeof props.onSelect === 'function'
+      var active = props.active === true
+      var danger = item.key === 'violations' && item.value > 0
+      var base = Object.assign(
+        {},
+        STYLES.chip,
+        clickable ? STYLES.chipButton : null,
+        active ? STYLES.chipActive : danger ? STYLES.chipDanger : null,
+      )
+      var hover = !clickable || active ? null : danger ? STYLES.chipHoverDanger : STYLES.chipHover
+      var pair = useInteractive(base, hover, STYLES.focusRing)
+      var valueStyle = active ? STYLES.chipValueActive : danger ? STYLES.chipValueDanger : STYLES.chipValue
+      var extra = {
+        key: item.key,
+        style: pair[0],
+        title: clickable
+          ? (item.hint || item.label) + (active ? '（点一下取消筛选）' : '（点一下只看这类）')
+          : item.hint || null,
+      }
+      if (clickable) {
+        extra.type = 'button'
+        extra['data-count-filter'] = item.key
+        extra['data-active'] = active ? 'yes' : 'no'
+        extra.onClick = props.onClick
+        Object.assign(extra, pair[1])
+      }
+      return h(
+        clickable ? 'button' : 'span',
+        extra,
+        h('span', { style: STYLES.chipLabel }, item.label),
+        ' ',
+        h('span', { style: valueStyle }, String(item.value)),
+      )
+    }
+
+    /** 顶部：五项计数（可点的直接当筛选器）。 */
     function CountsRow(props) {
       var filterable = { cards: true, doing: true, review: true, violations: true }
       var select = typeof props.onSelect === 'function' ? props.onSelect : null
@@ -591,111 +764,109 @@ window.__ModuleLoader__.load({
         'div',
         { style: STYLES.counts },
         props.items.map(function (item) {
-          var style = item.key === 'violations' && item.value > 0 ? STYLES.countDanger : STYLES.count
           var clickable = select !== null && filterable[item.key] === true
           var active = clickable && props.active === item.key
-          if (!clickable) {
-            return h('span', { key: item.key, style: style, title: item.hint || null }, item.label + ' ' + item.value)
-          }
-          var buttonStyle = Object.assign({}, style, active ? STYLES.countActive : STYLES.countButton)
-          return h(
-            'button',
-            {
-              key: item.key,
-              type: 'button',
-              style: buttonStyle,
-              title: (item.hint || item.label) + (active ? '（点一下取消筛选）' : '（点一下只看这类）'),
-              'data-count-filter': item.key,
-              'data-active': active ? 'yes' : 'no',
-              onClick: function () {
-                select(active ? null : item.key)
-              },
-            },
-            item.label + ' ' + item.value,
-          )
+          return h(CountChip, {
+            key: item.key,
+            item: item,
+            active: active,
+            onSelect: clickable ? select : null,
+            onClick: clickable
+              ? function () {
+                  select(active ? null : item.key)
+                }
+              : null,
+          })
         }),
       )
     }
 
-    /** 顶部：违规提示条。 */
+    /** 顶部：违规提示条（柔和底色 + 圆点，不拿硬边框吓人）。 */
     function AlertRow(props) {
-      return h('div', { style: STYLES.alert }, props.alert.text)
+      return h(
+        'div',
+        { style: STYLES.alert },
+        h('span', { style: STYLES.alertDot }),
+        h('span', null, props.alert.text),
+      )
     }
 
-    /** 小标题。 */
+    /** 分区标题：小字 + 一条发丝线，给长面板节奏。 */
     function SectionTitle(props) {
-      return h('div', { style: STYLES.sectionTitle }, props.text)
+      return h(
+        'div',
+        { style: STYLES.section },
+        h('span', { style: STYLES.sectionText }, props.text),
+        props.hint ? h('span', { style: STYLES.sectionHint }, props.hint) : null,
+        h('span', { style: STYLES.sectionRule }),
+      )
     }
 
     /**
-     * 一张看板卡。状态徽标 + 认领者 + P 级一眼可见；有子会话号且拿到 opener 时，
-     * 点击按官方寻址打开右侧栏 chat tab（沿用既有能力）。
+     * 一张看板卡：id / 标题 / 状态一眼可见；有子会话号且拿到 opener 时整卡可点。
      */
     function CardRow(props) {
       var card = props.card
       var tone = TONE_COLORS[card.tone] || TONE_COLORS.muted
-      var badgeStyle = {
-        padding: STYLES.badge.padding,
-        borderRadius: STYLES.badge.borderRadius,
-        border: STYLES.badge.border,
-        fontSize: STYLES.badge.fontSize,
-        whiteSpace: STYLES.badge.whiteSpace,
+      var badgeStyle = Object.assign({}, STYLES.badge, {
         color: tone,
-        // 左侧色条也用同一色调，六种状态在列里更快分辨
-        borderLeftWidth: '3px',
-        borderLeftStyle: 'solid',
-        borderLeftColor: tone,
-      }
-      var meta = []
-      if (card.priority !== '') meta.push('优先级 ' + card.priority)
-      meta.push(card.assigneeName === '' ? '未认领' : '认领者 ' + card.assigneeName)
-      meta.push('rev ' + card.rev)
-
-      var stats = '发现 ' + card.findings + ' · 证据 ' + card.sources + ' · 产物 ' + card.artifacts
-      if (card.violations > 0) stats += ' · 违规 ' + card.violations
-
+        background: TONE_TINTS[card.tone] || TONE_TINTS.muted,
+      })
       var open = props.onOpen
       var clickable = card.sessionId !== '' && typeof open === 'function'
+      var base = Object.assign({}, STYLES.card, clickable ? STYLES.cardClickable : null)
+      var pair = useInteractive(base, clickable ? STYLES.cardHover : null, clickable ? STYLES.focusRing : null)
       var openCard = function () {
         return clickable ? open(card) : false
       }
-      var cardProps = clickable
-        ? {
-            style: Object.assign({}, STYLES.card, STYLES.cardClickable),
-            role: 'button',
-            tabIndex: 0,
-            'data-status': card.status,
-            'data-card-id': card.id,
-            title: '打开子对话（右侧栏）',
-            onClick: openCard,
-            onKeyDown: function (event) {
-              if (event.key !== 'Enter' && event.key !== ' ') return
-              if (typeof event.preventDefault === 'function') event.preventDefault()
-              openCard()
-            },
-          }
-        : {
-            style: STYLES.card,
-            'data-status': card.status,
-            'data-card-id': card.id,
-            title: card.sessionId === '' ? '这张卡还没有子会话号，无法打开子对话' : '打开子对话（右侧栏）',
-          }
+      var meta = []
+      if (card.priority !== '') {
+        meta.push(h('span', { key: 'p' }, h('span', { style: STYLES.muted }, '优先级 '), h('span', { style: STYLES.metaStrong }, card.priority)))
+      }
+      meta.push(
+        h(
+          'span',
+          { key: 'a' },
+          h('span', { style: STYLES.muted }, card.assigneeName === '' ? '未认领' : '认领者 '),
+          card.assigneeName === '' ? null : h('span', { style: STYLES.metaStrong }, card.assigneeName),
+        ),
+      )
+      meta.push(h('span', { key: 'r', style: STYLES.muted }, 'rev ' + card.rev))
+      var stats = ['发现 ' + card.findings, '证据 ' + card.sources, '产物 ' + card.artifacts]
+      if (card.violations > 0) stats.push('违规 ' + card.violations)
+      meta.push(h('span', { key: 's' }, stats.join(' · ')))
+      var extra = Object.assign(
+        { style: pair[0], 'data-status': card.status, 'data-card-id': card.id },
+        clickable ? pair[1] : null,
+      )
+      if (clickable) {
+        extra.role = 'button'
+        extra.tabIndex = 0
+        extra.title = '打开子对话（右侧栏）'
+        extra.onClick = openCard
+        extra.onKeyDown = function (event) {
+          if (event.key !== 'Enter' && event.key !== ' ') return
+          if (typeof event.preventDefault === 'function') event.preventDefault()
+          openCard()
+        }
+      } else {
+        extra.title = card.sessionId === '' ? '这张卡还没有子会话号，无法打开子对话' : '打开子对话（右侧栏）'
+      }
       return h(
         'div',
-        cardProps,
+        extra,
         h(
           'div',
           { style: STYLES.cardTop },
-          h('span', { style: STYLES.cardName }, (card.id ? card.id + ' · ' : '') + (card.label || '（无标题）')),
-          // data-tone 给测试与排障用：六种状态必须落在六种色调上（人工勾选已机器化）
+          card.id ? h('span', { style: STYLES.cardId }, card.id) : null,
+          h('span', { style: STYLES.cardName }, card.label || '（无标题）'),
           h('span', { style: badgeStyle, 'data-tone': card.tone }, card.statusText),
         ),
-        h('div', { style: STYLES.muted }, meta.join(' · ')),
-        h('div', { style: STYLES.muted }, stats),
+        h('div', { style: STYLES.cardMeta }, meta),
       )
     }
 
-    /** 时间线一行。 */
+    /** 时间线一行：序号等宽对齐，kind 做成小签，标题单行省略。 */
     function TimelineRow(props) {
       var item = props.item
       return h(
@@ -703,7 +874,8 @@ window.__ModuleLoader__.load({
         { style: STYLES.timelineRow },
         h('span', { style: STYLES.seq }, '#' + item.seq),
         h('span', { style: STYLES.kind }, item.kindLabel),
-        h('span', { style: STYLES.timelineTitle }, item.title || '（无标题）'),
+        item.cardId ? h('span', { style: STYLES.cardRef }, item.cardId) : null,
+        h('span', { style: STYLES.timelineTitle, title: item.title || '' }, item.title || '（无标题）'),
       )
     }
 
@@ -1002,12 +1174,13 @@ window.__ModuleLoader__.load({
         h(DeckHeader, { model: model }),
         model.alert ? h(AlertRow, { alert: model.alert }) : null,
         h(CountsRow, { items: model.countItems, active: filter, onSelect: setFilter }),
-        h(
-          SectionTitle,
-          filter === null
-            ? { text: '看板' }
-            : { text: '看板 · 只看' + filterLabel(filter) + '（' + shown.length + ' 张，再点一次计数取消）' },
-        ),
+        h(SectionTitle, {
+          text: '看板',
+          hint:
+            filter === null
+              ? ''
+              : '只看' + filterLabel(filter) + ' · ' + shown.length + ' 张 · 再点一次计数取消',
+        }),
         shown.length > 0
           ? h(
               'div',

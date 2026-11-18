@@ -176,6 +176,14 @@
 - 修复：`bootstrapMaster` 前加 `insideDshHome(cwd)` 守卫 —— cwd 落在 DSH_HOME 之内就不引导，只记一条诊断；`scripts/verify-restart.mjs` 同时把历史遗留记录标成 ⚠️ 并给出清理办法。
 - 防回归：`test/wiring.test.mjs` 用「defaultDirectory = <DSH_HOME>/profiles/desktop」复刻真宿主，断言不创建 master。
 
+### 5.10 样式对象被当成 props：六种状态色在真机上全丢（2026-11-19）
+
+- 现象：面板视觉重做后单测全绿，E2E 的「六种状态颜色互不相同」却失败 —— 六个徽标的 computed color 全是 `rgb(15, 17, 21)`（正文色），`style` 属性是 `null`。
+- 取证：E2E 打印徽标 outerHTML，得到 `<span flex="none" padding="1px 8px" borderradius="999px" ...>` —— React 把样式键当成小写 DOM 属性写了下去。
+- 根因：徽标写成 `h('span', Object.assign({}, badgeStyle, { 'data-tone': ... }))`，**少了 `style:` 这一层**；单测当时只打印了 props（能看见 color 键），误判成「样式在」。
+- 修复：改回 `h('span', { style: badgeStyle, 'data-tone': ... })`；同时把面板视觉对齐宿主自己的语言 —— 新增 `TOKENS`（正文 #0f1115 / 次级 #61666b / 三级 #81858c / 主色 #4176e6 / 表面 #f9fafb / 发丝线 / 过渡 / 圆角 / 等宽字体）与 `TONE_TINTS`（徽标淡底），六状态徽标改成淡色底 + 同色文字，违规计数带红底，时间线补卡号列，可点卡片补 `tabIndex` + Enter/空格 + 焦点环。
+- 防回归：单测断言「徽标必须带 style 对象、样式键不能铺到 props 上」，并新增两条键盘可达性用例；E2E 保留六状态配色判据（读 computed color）与窄面板不溢出。
+
 ## 6. 雷区（踩过的）
 
 - **不要用 `%TEMP%`**：沙箱进程 `mkdtemp` 报 EPERM，一律用仓内 `.test-tmp`（`scripts/test.mjs` 已处理）。
@@ -193,6 +201,7 @@
 - **`startActivation` 的 `signal` 是必填**（`dsh-subagent/src/types.ts`）：漏了就是 `throwIfAborted` of undefined，且**在审批通过之后**才炸（见 5.5）。
 - **工具输出必须是纯数据**：宿主做 lossless JSON 校验，**校验在副作用之后** —— 把宿主句柄（Promise/函数）塞进返回值，会出现「卡建了、子对话起了、工具却报错」（见 5.6）。
 - **`DSH_HOME` 只给 shell 子进程，桌面应用主进程没有**：任何依赖它的路径都要按 `dshHome()` 的兜底走，别再自己拼一套（见 5.3）。
+- **内联样式必须包在 `style` 里**：`Object.assign({}, STYLES.x, extra)` 直接当 props 传，React 会把 `flex/padding/color` 写成小写 DOM 属性，样式静默全丢；单测只 `JSON.stringify(props)` 看不出来（见 5.10）。
 - **客户端是经典脚本**：`test/client.test.mjs` 用 `new Function` 执行再取 `__ModuleLoader__.load` 的工厂；假 ctx 的 `slots.inject(name, fn)` **必须真的执行 `fn`**，否则座位永远注册不上（踩过）。
 - **PowerShell 单元素管道会退化成字符串**，拼 PATH 之类必须 `@()` 强制数组。
 - 子代理**不得自行 commit**；提交由 lead 做，提交前必须全量测试绿。

@@ -389,7 +389,7 @@ async function runDataScenario(page) {
   // 色条在状态徽标上（data-tone），卡片容器只有灰底
   const colorsRaw = await page.evaluate("JSON.stringify(Array.from(document.querySelectorAll('[data-agent-master=\"deck\"] [data-card-id] [data-tone]')).map(function (e) { return e.getAttribute('data-tone') + '=' + getComputedStyle(e).color + '/' + getComputedStyle(e).borderLeftColor }))")
   const colors = JSON.parse(colorsRaw || '[]')
-  const toneSet = new Set(colors.map((item) => item.split('=')[1]))
+  const toneSet = new Set(colors.map((item) => item.split('=')[1].split('/')[0]))
   check('六种状态颜色互不相同（目视可辨）', colors.length === 6 && toneSet.size === 6, JSON.stringify(colors).slice(0, 240))
 
   // 点计数筛选：只看待验收 → 只剩 1 张；再点一次取消 → 回到 6 张

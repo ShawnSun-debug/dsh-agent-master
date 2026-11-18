@@ -90,6 +90,16 @@ function walk(node, visit) {
   }
 }
 
+/** 把 createElement 树拍平成可见文本（断言「看得见什么」，不绑内部结构）。 */
+function textOf(node) {
+  if (node === null || node === undefined || node === false || node === true) return ''
+  if (typeof node === 'string' || typeof node === 'number') return String(node)
+  if (Array.isArray(node)) return node.map(textOf).join(' ').replace(/ {2,}/g, ' ')
+  if (typeof node !== 'object') return ''
+  if (!Array.isArray(node.children)) return ''
+  return node.children.map(textOf).join(' ').replace(/ {2,}/g, ' ')
+}
+
 /** 渲染 DeckPanel 并返回 element 树。 */
 function renderPanel(state, extraProps = {}) {
   const panel = findComponent('DeckPanel')
@@ -230,10 +240,57 @@ test('client：渲染出的卡片行带 data-status，并显示 P 级与认领�
   assert.equal(rows.length, 1)
   const rendered = rows[0].type(rows[0].props)
   assert.equal(rendered.props['data-status'], 'doing')
-  const flat = JSON.stringify(rendered)
+  const flat = textOf(rendered)
   assert.match(flat, /优先级 P1/)
   assert.match(flat, /认领者 worker-a/)
   assert.match(flat, /rev 3/)
+  // 标题与状态必须都在可见文本里（设计稿：id、标题、状态一行读完）
+  assert.match(flat, /看板数据层/)
+  assert.match(flat, /开工中/)
+  // 真机回归：徽标样式曾经被当成 props 铺开（React 写成小写属性），浏览器里颜色全丢
+  const badge = rendered.children[0].children[2]
+  assert.equal(badge.props['data-tone'], 'progress')
+  assert.ok(badge.props.style, '徽标必须带 style 对象')
+  assert.equal(badge.props.style.color, client.toneColors.progress)
+  assert.equal(badge.props.flex, undefined, '样式键不可以铺到 props 上')
+})
+
+
+test('client：可点的卡片是键盘可用的按钮（role/tabIndex/回车空格）', async () => {
+  const opened = []
+  const tree = renderPanel(makeDeck(), {
+    openChild: (card) => {
+      opened.push(card.id)
+      return true
+    },
+  })
+  const rows = []
+  walk(tree, (node) => {
+    if (typeof node.type === 'function' && node.type.name === 'CardRow') rows.push(node)
+  })
+  const rendered = rows[0].type(rows[0].props)
+  assert.equal(rendered.props.role, 'button')
+  assert.equal(rendered.props.tabIndex, 0)
+  assert.equal(typeof rendered.props.onFocus, 'function')
+  assert.equal(rendered.props.style.cursor, 'pointer')
+  const key = (value) => ({ key: value, preventDefault() {} })
+  rendered.props.onKeyDown(key('Enter'))
+  rendered.props.onKeyDown(key(' '))
+  assert.deepEqual(opened, ['t1', 't1'])
+})
+
+test('client：没有子会话号的卡片不冒充按钮（没有 role / onClick）', async () => {
+  const deck = makeDeck()
+  deck.cards[0].sessionId = ''
+  const tree = renderPanel(deck, { openChild: () => true })
+  const rows = []
+  walk(tree, (node) => {
+    if (typeof node.type === 'function' && node.type.name === 'CardRow') rows.push(node)
+  })
+  const rendered = rows[0].type(rows[0].props)
+  assert.equal(rendered.props.role, undefined)
+  assert.equal(rendered.props.onClick, undefined)
+  assert.match(String(rendered.props.title), /子会话/)
 })
 
 // ---------------------------------------------------------------------------
