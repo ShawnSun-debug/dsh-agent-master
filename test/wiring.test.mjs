@@ -334,7 +334,8 @@ test('wiring：master_assign 的 startActivation 绑定本次 exec.agent，并�
     assert.equal(result.childSessionId, 'child-1')
     assert.equal(result.tools, null, '没传 tools 就不该限制子对话工具集')
     assert.ok(result.promptBytes > 0, 'prompt 必须真的渲染过（字节数 > 0）')
-    assert.deepEqual(result.child, { childId: 'child-1', name: 'child' })
+    // 句柄是**投影**，不是宿主对象本身（原样返回会被宿主判成非 lossless JSON）
+    assert.deepEqual(result.child, { childId: 'child-1', name: 'child', messageId: null })
 
     // 1. spawn 参数：provider/label/prompt/parent/delivery 全按契约
     assert.equal(calls.activations.length, 1)
@@ -1012,6 +1013,53 @@ test('wiring：startActivation 必带 signal（真机回归：宿主对 undefine
     )
     assert.equal(assigned.taskId, 't1')
     assert.ok(calls.activations[0].signal instanceof AbortSignal, '必须把真实 AbortSignal 交给宿主')
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('wiring：master_assign 的返回值必须是 lossless JSON（真机回归：宿主拒收含 Promise 的句柄）', async () => {
+  const dir = await makeTempDir()
+  try {
+    const { ctx, calls } = fakeCtx({ rootOf: (agent) => agent })
+    // 复刻宿主真实句柄：带 result(Promise) 与 dispose()，原样返回会被宿主判成非 lossless JSON
+    ctx.subagents.startActivation = async (payload) => {
+      calls.activations.push(payload)
+      return {
+        childId: payload.childId,
+        name: payload.name ?? 'child',
+        messageId: 'm-1',
+        result: Promise.resolve('done'),
+        dispose() {},
+      }
+    }
+    const agent = makeAgent('root-1', dir)
+    await apply(ctx, { dataDir: dir })
+
+    const assigned = await findTool(calls, 'master_assign').execute(
+      { label: 'A', brief: { goal: '任务一' } },
+      { agent },
+    )
+    assert.equal(assigned.ok, true)
+    assert.deepEqual(assigned.child, {
+      childId: calls.activations[0].childId,
+      name: 'child',
+      messageId: 'm-1',
+    })
+
+    // 宿主就是这么校验的：整份返回值必须能无损往返，且不含函数/循环/Promise
+    assert.deepEqual(JSON.parse(JSON.stringify(assigned)), assigned)
+    const seen = new Set()
+    const walk = (value, path) => {
+      if (value === null) return
+      if (typeof value === 'function') assert.fail('返回值里不能有函数：' + path)
+      if (typeof value === 'undefined') assert.fail('返回值里不能有 undefined：' + path)
+      if (typeof value !== 'object') return
+      assert.equal(seen.has(value), false, '返回值里不能有循环引用：' + path)
+      seen.add(value)
+      for (const [key, item] of Object.entries(value)) walk(item, path + '.' + key)
+    }
+    walk(assigned, 'assign')
   } finally {
     await rm(dir, { recursive: true, force: true })
   }

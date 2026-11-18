@@ -7,7 +7,7 @@
 ## 1. 现在在哪
 
 - **T09–T13 五票全部落地**（看板为核心的重定向）：看板数据层、旧看板迁移、门禁与派发审批、经验沉淀、指挥台 deck v2。
-- 测试：19 个文件 / **279 例全绿**。入口 `node scripts/test.mjs`（本机 `%TEMP%` 对沙箱进程不可写，脚本把 TEMP 指到仓内 `.test-tmp`；`node --test` 在 confined 模式下会因管道 spawn 报 EPERM，故改成逐文件 `node <file>`）。
+- 测试：19 个文件 / **280 例全绿**。入口 `node scripts/test.mjs`（本机 `%TEMP%` 对沙箱进程不可写，脚本把 TEMP 指到仓内 `.test-tmp`；`node --test` 在 confined 模式下会因管道 spawn 报 EPERM，故改成逐文件 `node <file>`）。
 - 源码：`lib/{config,board,migrate,ledger,handoff,gate,approval,experience,tools,sections,deck,sources,dispatch,master,index}.js` + `client/client.js`。
 - 契约：`docs/GLOSSARY.md`（术语）、`docs/adr/0001–0004`（不可逆决策）、`.scratch/api-notes.md`（宿主 API 行号证据）、`issues/00-wayfinder-map.md`（地图）。
 - 落盘：`<dataDir>/<rootId>/{board.json,ledger.jsonl,artifacts/}`；指挥台 `<root cwd>/.agent-master/<rootId>/deck.json`；经验 `<root cwd>/.agent-master/experience.jsonl` + `~/.dsh/agent-master/experience.jsonl`。
@@ -140,6 +140,13 @@
 - 为什么测试没挡住：假 ctx 的 `startActivation` 收下 payload 就返回，从不碰 `signal`；离线用例也不经过「审批 → 真 spawn」。
 - 防回归：`test/wiring.test.mjs`「startActivation 必带 signal」让假 ctx 复刻宿主契约（`payload.signal.throwIfAborted()`），并断言传进去的是真 `AbortSignal`。
 
+### 5.6 `master_assign` 原样返回激活句柄：副作用发生了，工具却报错（2026-11-18）
+
+- 现象（重启验证第③条时撞上）：`master_assign` 返回 `tool "master_assign" returned invalid output: value is not lossless JSON`，但看板里卡 `t1` 已建、`childSessionId` 已写，`list_agents` 里 `smoke-a` 已在跑 —— **看起来像派发失败，其实已经派成功了**。
+- 根因：`lib/tools.js` 把宿主 `startActivation` 的返回句柄原样放进输出的 `child` 字段，句柄里有 `result: Promise` 与 `dispose()`；宿主对输出做 lossless JSON 校验，**且校验在副作用之后**。
+- 修复：新增 `childHandle()` 投影，只保留 `childId / name / messageId` 三个字符串字段。
+- 防回归：`test/wiring.test.mjs`「master_assign 的返回值必须是 lossless JSON」让假 ctx 返回带 Promise/dispose 的真形状句柄，并递归断言返回值无函数、无 undefined、无循环；同时把旧断言 `result.child` 改成投影形状（`messageId: null`）。
+
 ## 6. 雷区（踩过的）
 
 - **不要用 `%TEMP%`**：沙箱进程 `mkdtemp` 报 EPERM，一律用仓内 `.test-tmp`（`scripts/test.mjs` 已处理）。
@@ -151,6 +158,7 @@
 - **`tools.restrict()` 只能挂在 agent 作用域的 `agent.ctx` 上**：全局 ctx 调用直接抛错；`agent/created` 是 serial 事件，挂监听要赶在第一步之前。
 - **子对话必须预分配 `childId`**：`startActivation` 的 `agent/created` 早于它返回。
 - **`startActivation` 的 `signal` 是必填**（`dsh-subagent/src/types.ts`）：漏了就是 `throwIfAborted` of undefined，且**在审批通过之后**才炸（见 5.5）。
+- **工具输出必须是纯数据**：宿主做 lossless JSON 校验，**校验在副作用之后** —— 把宿主句柄（Promise/函数）塞进返回值，会出现「卡建了、子对话起了、工具却报错」（见 5.6）。
 - **`DSH_HOME` 只给 shell 子进程，桌面应用主进程没有**：任何依赖它的路径都要按 `dshHome()` 的兜底走，别再自己拼一套（见 5.3）。
 - **客户端是经典脚本**：`test/client.test.mjs` 用 `new Function` 执行再取 `__ModuleLoader__.load` 的工厂；假 ctx 的 `slots.inject(name, fn)` **必须真的执行 `fn`**，否则座位永远注册不上（踩过）。
 - **PowerShell 单元素管道会退化成字符串**，拼 PATH 之类必须 `@()` 强制数组。

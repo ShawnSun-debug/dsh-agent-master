@@ -1,8 +1,9 @@
 # HANDOFF — dsh-agent-master
 
 > 一条 master 对话指挥 N 路子对话；共享看板（`board.json`）是唯一事实来源。
-> **T09–T13 五票已全部落地，279 例测试全绿；工具层已在真宿主（headless + 真模型）跑通全链路。**
-> **2026-11-18 又修了三个真机故障（数据根少 `.dsh`、经验库目录钉死、`startActivation` 缺 `signal`）——见 `PROGRESS.md` §5.3–5.5，都必须重启后才生效。**
+> **T09–T13 五票已全部落地，280 例测试全绿；工具层已在真宿主（headless + 真模型）跑通全链路。**
+> **2026-11-18 修了四个真机故障（数据根少 `.dsh`、经验库目录钉死、`startActivation` 缺 `signal`、`assign` 返回宿主句柄）——见 `PROGRESS.md` §5.3–5.6，都要重新加载插件才生效。**
+> 重启后已验证：经验库 2→3 条可读、产物落 `~/.dsh/agent-master`、`master_assign` 真 spawn 出 `smoke-a` 并回报（`name=dsh-agent-master`/`version=0.1.0`）、`op=accept` 把 `t1` 置 done(rev 6)。
 > 剩下只有 GUI 侧三条人工勾选，不是写码。
 
 ## 0. 60 秒上手（按顺序读）
@@ -18,7 +19,7 @@
 | 项 | 值 |
 |---|---|
 | 票 | T09 / T10 / T11 / T12 / T13 **全部完成** |
-| 测试 | 19 个文件 / 279 例，全绿（`node scripts/test.mjs`） |
+| 测试 | 19 个文件 / 280 例，全绿（`node scripts/test.mjs`） |
 | 真机 | 工具层全链路 + Master 会话引导（真宿主建会话、置顶、`masters/*.json` 落盘）已验证；审批 fail-closed 已验证（`PROGRESS.md` §3.5） |
 | 未验证 | 3 条 **GUI 侧**，见 `PROGRESS.md` §4 与 `docs/e2e-checklist.md` |
 | 插件 | 已装进 desktop profile（`link:` 指向本仓库，改代码重启即生效） |
