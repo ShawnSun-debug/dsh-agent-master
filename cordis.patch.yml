@@ -3,9 +3,9 @@
     - id: agent-master
       name: dsh-agent-master
       config:
-        maxChildren: 4
+        maxChildren: 12
         maxParallelSearch: 4
-        boardMaxEntries: 256
+        boardMaxEntries: 512
         digestBudgetBytes: 65536
         maxReportBytes: 8192
         defaultEnabled: false
