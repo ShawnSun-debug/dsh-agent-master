@@ -16,6 +16,26 @@
 
 `board.json` = `{version:1, headSeq, cards[], records[]}`。**卡可改**（每次改 rev+1，写时必带 rev 做 CAS），**记录只追加**（带 `cardId` 外键，永不改）。状态机 `todo → assigned → doing → review → done`，另有 `blocked`（任何非 done 卡 ↔ blocked，解除只能 master 做）；`assignee=master` 可 `todo → doing` 直达；`done` 只有 master 能写。
 
+### T14（2026-11-20 完成）：指挥台面板进 dsh-Go
+
+用户目标：让指挥台在 dsh-Go（ccch1mneyyy/dsh-Go 手机客户端）也注册出原生面板；桌面注册（client.js 两段式座位）保持不动。
+调研：t1 语料全解（.agent-master/research/corpus-ui-json.md）、t2 仓库权威 schema（repo-ui-json.md）、t3 交互契约（actions-chain.md），三卡全验收、经验入库。
+关键口径：ui.json 是**用户侧**配置（$DSH_HOME/dsh-go/ui.json，11 顶层键闭集）；插件面板注册在 package.json **dshGo 清单** + 引擎侧 ctx.dshGo.panel(id,{view,actions})；视图=v2 DSL（面板预算 32KiB/120 节点/深 8/子 32）。
+落地（a882ea0）：
+- package.json dshGo 清单（v:1 / panels[deck] / placement session.tab / engines.dsh >=0.2.1-rc.2 <0.3.0-0）
+- lib/deck-view.js：快照→v2 视图纯函数（五格计数行 + 卡片行 + 可操作卡按钮 认领/开工/验收/打回 + 空态指路；组件只用官方示例实证过的五种 + actions，tone 只用实证值 'good'）
+- lib/index.js：ctx.inject(['dshGo']) 注册 panel('deck')（view 按 scope.sessionId 解析 root 现算 deck；actions.draft=起草：insert 指令进输入框不发送，返回 [{insert},{toast}]）；systemPrompt/sessionProjections 加存在性守卫（check.mjs 假 ctx 不炸）
+- 按钮=起草版（用户以「继续」确认推荐项）：审批/经验/审计全链路保留，不给面板合成特权身份
+验证：node scripts/test.mjs **20 个测试文件全绿**（新增 deck-view 11 例）；官方 sdk/plugin-kit check.mjs --load **exit=0**（面板 1、zh/en 视图可显示、仅 2 条暗色对比度 note）。kit 最小闭包 15 文件在 .test-tmp/plugin-kit（api.github.com base64 抓取，脚本 .test-tmp/fetch-kit.mjs）。
+手机端人工验证（**未验证**，需要真机）：
+1. 引擎侧：dsh-Go 连**本机引擎**（relay 下原生面板不可达，语料 #423）。
+2. App **彻底退出再打开**（inventory 生命周期只读一次，#521）。
+3. 打开 master 所在会话 → 会话详情「插件」页签 → 应见「指挥台」面板：五格计数 + 卡片列表。
+4. 待验收卡点「验收」→ 输入框被填「验收 tN」（不发送）→ 确认发送，由 master 走 master_board accept。
+5. 面板缺失时查 ~/.dsh/cache/dsh-go-bridge/occupancy.json 与引擎日志（#32）。
+顺手修复（2026-11-20）：test/wiring.test.mjs 经验库测试不密封——本机 ~/.dsh/agent-master/experience.jsonl 已有 5 条全局经验，两级合并令 total=6≠1 必红；按 plugin.test.mjs 约定补「临时 DSH_HOME + finally 恢复」。
+另：工作树仍有一处**本会话之前**的未提交改动 cordis.patch.yml（maxChildren 4→12，上一会话遗留），未纳入本提交，待用户定夺。
+
 ## 2. 决策偏差（ADR 之外，接手必须知道）
 
 - **派发审批不走宿主 `{kind:'ask'}`**：ADR-0002 原写让 `tools/pre-execute` 返回 `{kind:'ask'}` 交给宿主管线弹审批。实做改为门禁**自己调 `ctx.get('approval').request(...)`** 并自带 `AbortSignal` 计时。原因：宿主 `ApprovalRequest` 只有 `{agent,toolName,callId,reason,displayReason,signal}`，**没有超时字段**，而票面要求 `approvalWaitMs`（默认 600000）到点失败。行为等价点：仍是同一个 approval 服务与审计卡；仍 fail-closed（`rejected`/`cancelled`/`unavailable` 一律不派发）；`policy=never` 会得到 `rejected`，拒绝文案里点名 `never`。
@@ -36,6 +56,7 @@
 | T12 | 经验沉淀：`master_experience`、`op=accept` 必须给经验或显式 `experienceNone`、rework/abort | `lib/experience.js`、`test/experience`（14） | `1d16682` |
 | T13 | 指挥台 deck v2：六状态/认领者/P 级、v1 占位、轮询兜底、不写会话事件 | `lib/deck.js`、`client/client.js`、`test/deck`（12）、`test/client`（17） | `776e582` |
 | 接线 | 七工具注册、迁移前置、审批门禁、经验库注入、deck 落盘 | `lib/index.js`、`test/wiring`（17）、`test/integration`（1）、`test/plugin`（15） | `21fe0ac` |
+| T14 | 指挥台面板进 dsh-Go：dshGo 清单 + ctx.dshGo.panel 注册 + 起草版按钮视图；官方 check.mjs --load exit=0 | `package.json`、`lib/deck-view.js`、`lib/index.js`、`test/deck-view`（11） | `a882ea0` |
 
 ## 3.5 真机验证记录（2026-11-18，headless 真宿主 + 真模型）
 

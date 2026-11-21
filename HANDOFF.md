@@ -6,6 +6,7 @@
 > **指挥台空白已用真浏览器锁定并修好**：新增 `npm run test:e2e`（`scripts/e2e-probe.mjs`），在独立 profile 里起宿主 + 无头 Edge，断言入口出现／点击／面板渲染正文／控制台零错误。**改客户端不用重启桌面端，刷新页面即可（2026-11-19 实测：改 client.js → 仅 `Page.reload` → 新文案出现）；改服务端（lib/）才要重启。**
 > 重启后已验证：经验库 2→3 条可读、产物落 `~/.dsh/agent-master`、`master_assign` 真 spawn 出 `smoke-a` 并回报（`name=dsh-agent-master`/`version=0.1.0`）、`op=accept` 把 `t1` 置 done(rev 6)。
 > 剩下只有 GUI 侧三条人工勾选，不是写码。
+> **T14 已落地（a882ea0）：指挥台面板进 dsh-Go**——dshGo 清单 + ctx.dshGo.panel 注册 + 起草版按钮（验收/打回/认领/开工填输入框不发送）；官方 check.mjs --load exit=0；手机端人工验证未做，步骤见 PROGRESS.md T14 节。
 
 ## 0. 60 秒上手（按顺序读）
 
@@ -19,8 +20,8 @@
 
 | 项 | 值 |
 |---|---|
-| 票 | T09 / T10 / T11 / T12 / T13 **全部完成** |
-| 测试 | 19 个文件 / 293 例，全绿（`node scripts/test.mjs`）+ 独立 profile 真浏览器 E2E（`npm run test:e2e`：5 项；`--with-data` 18 项，含真会话 + 真快照 + 实时刷新 + 六状态配色 + 计数筛选 + 窄面板不溢出 + 截图） |
+| 票 | T09 / T10 / T11 / T12 / T13 / T14 **全部完成** |
+| 测试 | 20 个文件全绿（`node scripts/test.mjs`，T14 新增 deck-view 11 例）+ 独立 profile 真浏览器 E2E（`npm run test:e2e`：5 项；`--with-data` 18 项，含真会话 + 真快照 + 实时刷新 + 六状态配色 + 计数筛选 + 窄面板不溢出 + 截图）+ 官方 dsh-Go 自检 `check.mjs --load` exit=0 |
 | 真机 | 工具层全链路 + Master 会话引导（真宿主建会话、置顶、`masters/*.json` 落盘）已验证；审批 fail-closed 已验证（`PROGRESS.md` §3.5） |
 | 未验证 | 3 条 **GUI 侧**，见 `PROGRESS.md` §4 与 `docs/e2e-checklist.md` |
 | 插件 | 已装进 desktop profile（`link:` 指向本仓库，改代码重启即生效） |
