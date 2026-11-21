@@ -895,8 +895,10 @@ test('wiring：apply 登记 agents/workspaceRegistry 注入，引导出一个置
   try {
     const { ctx, calls } = fakeCtx()
     await apply(ctx, { dataDir: dir })
-    assert.equal(calls.injects.length, 1)
+    // 两条注入：契约引导（agents/workspaceRegistry）+ T14 的 dsh-Go 面板（可选服务）。
+    assert.equal(calls.injects.length, 2)
     assert.deepEqual(calls.injects[0].names, ['agents', 'workspaceRegistry'])
+    assert.deepEqual(calls.injects[1].names, ['dshGo'])
 
     const created = []
     const pinned = []
@@ -947,6 +949,10 @@ test('wiring：apply 登记 agents/workspaceRegistry 注入，引导出一个置
 test('wiring：经验库按调用方会话的工作区解析，不在 apply() 时把目录钉死（真宿主回归）', async () => {
   const workspace = await makeTempDir()
   const stale = await makeTempDir()
+  // 全局库必须隔离：本机 ~/.dsh/agent-master 攒了真机经验后，两级合并会让 total 变大，
+  // 断言 total===1 就取决于机器状态。与 plugin.test.mjs 同一约定：临时 DSH_HOME + finally 恢复。
+  const savedHome = process.env.DSH_HOME
+  process.env.DSH_HOME = join(stale, 'dsh-home')
   try {
     // 工作区里预置一条经验：它就是真机上 op=list 应该看得见的那条
     await mkdir(join(workspace, '.agent-master'), { recursive: true })
@@ -988,6 +994,8 @@ test('wiring：经验库按调用方会话的工作区解析，不在 apply() �
     assert.equal(after.total, 2, '写和读必须是同一个目录')
     assert.equal(existsSync(join(stale, '.agent-master', 'experience.jsonl')), false, '不该再往 apply() 时的目录写')
   } finally {
+    if (savedHome === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = savedHome
     await rm(workspace, { recursive: true, force: true })
     await rm(stale, { recursive: true, force: true })
   }

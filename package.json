@@ -26,6 +26,16 @@
       "platform": "web"
     }
   },
+  "dshGo": {
+    "v": 1,
+    "title": { "zh": "指挥台", "en": "Command deck" },
+    "contributes": {
+      "panels": [
+        { "id": "deck", "title": { "zh": "指挥台", "en": "Deck" }, "placement": ["session.tab"] }
+      ]
+    }
+  },
+  "engines": { "dsh": ">=0.2.1-rc.2 <0.3.0-0" },
   "scripts": {
     "test": "node scripts/test.mjs",
     "test:e2e": "node scripts/e2e-probe.mjs",

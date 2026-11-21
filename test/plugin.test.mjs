@@ -381,7 +381,8 @@ test('插件：masterEnabled 缺省时请求 agents/workspaceRegistry 注入，�
   const on = makeCtx()
   const disposeOn = await apply(on.ctx, {})
   try {
-    assert.deepEqual(on.calls.injects, [['agents', 'workspaceRegistry']])
+    // 两条注入：契约引导（agents/workspaceRegistry）+ T14 的 dsh-Go 面板。
+    assert.deepEqual(on.calls.injects, [['agents', 'workspaceRegistry'], ['dshGo']])
   } finally {
     disposeOn()
   }
@@ -389,7 +390,8 @@ test('插件：masterEnabled 缺省时请求 agents/workspaceRegistry 注入，�
   const off = makeCtx()
   const disposeOff = await apply(off.ctx, { masterEnabled: false })
   try {
-    assert.deepEqual(off.calls.injects, [])
+    // 引导关掉只影响 master 会话自动创建；指挥台面板独立存在。
+    assert.deepEqual(off.calls.injects, [['dshGo']])
   } finally {
     disposeOff()
   }
